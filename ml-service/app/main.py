@@ -9,10 +9,12 @@ from app.models.registry import model_registry
 from app.routes import health, predict, evaluate, models as models_route
 
 
+settings.trained_models_path.mkdir(parents=True, exist_ok=True)
+settings.static_path.mkdir(parents=True, exist_ok=True)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    settings.trained_models_path.mkdir(parents=True, exist_ok=True)
-    settings.static_path.mkdir(parents=True, exist_ok=True)
     model_registry.initialize()
     yield
 
