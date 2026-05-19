@@ -75,10 +75,32 @@ async function getQuestions(req, res, next) {
 
 async function updateQuestion(req, res, next) {
   try {
+    const existing = await prisma.question.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw new AppError("Question not found", 404);
+
+    const { type, text, options, correctAnswer, marks, order, explanation } = req.body;
+    const data = {};
+    if (type !== undefined) data.type = type;
+    if (text !== undefined) data.text = text;
+    if (options !== undefined) data.options = options;
+    if (correctAnswer !== undefined) data.correctAnswer = correctAnswer;
+    if (marks !== undefined) data.marks = marks;
+    if (order !== undefined) data.order = order;
+    if (explanation !== undefined) data.explanation = explanation;
+
     const question = await prisma.question.update({
       where: { id: req.params.id },
-      data: req.body,
+      data,
     });
+
+    if (marks !== undefined && marks !== existing.marks) {
+      const delta = marks - existing.marks;
+      await prisma.exam.update({
+        where: { id: existing.examId },
+        data: { totalMarks: { increment: delta } },
+      });
+    }
+
     res.json({ success: true, data: question });
   } catch (err) {
     next(err);

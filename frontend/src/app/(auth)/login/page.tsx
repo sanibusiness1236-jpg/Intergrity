@@ -32,8 +32,12 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     try {
-      await login(email, password);
-      router.push("/");
+      const user = await login(email, password);
+      const target =
+        user?.role === "STUDENT" ? "/student" :
+        user?.role === "INVIGILATOR" ? "/invigilator" :
+        "/examiner";
+      router.replace(target);
     } catch (err: any) {
       setError(err.response?.data?.error?.message || "Login failed");
     }

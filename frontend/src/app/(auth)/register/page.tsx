@@ -36,8 +36,12 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
     try {
-      await register(form);
-      router.push("/");
+      const user = await register(form);
+      const target =
+        user?.role === "STUDENT" ? "/student" :
+        user?.role === "INVIGILATOR" ? "/invigilator" :
+        "/examiner";
+      router.replace(target);
     } catch (err: any) {
       setError(err.response?.data?.error?.message || "Registration failed");
     }

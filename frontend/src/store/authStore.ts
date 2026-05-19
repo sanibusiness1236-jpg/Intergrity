@@ -7,8 +7,8 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
 
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: Record<string, string>) => Promise<void>;
+  login: (email: string, password: string) => Promise<User | undefined>;
+  register: (data: Record<string, string>) => Promise<User | undefined>;
   logout: () => void;
   fetchProfile: () => Promise<void>;
 }
@@ -25,6 +25,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       localStorage.setItem("accessToken", data.data.accessToken);
       localStorage.setItem("refreshToken", data.data.refreshToken);
       set({ user: data.data.user, isAuthenticated: true });
+      return data.data.user;
     } finally {
       set({ isLoading: false });
     }
@@ -33,10 +34,22 @@ export const useAuthStore = create<AuthState>((set) => ({
   register: async (formData) => {
     set({ isLoading: true });
     try {
-      const { data } = await api.post("/auth/register", formData);
+      const role = formData.role;
+      const payload: Record<string, string> = {};
+      for (const [k, v] of Object.entries(formData)) {
+        if (typeof v === "string" && v.trim() === "") continue;
+        payload[k] = v;
+      }
+      if (role !== "STUDENT") {
+        delete payload.studentId;
+        delete payload.program;
+        delete payload.gender;
+      }
+      const { data } = await api.post("/auth/register", payload);
       localStorage.setItem("accessToken", data.data.accessToken);
       localStorage.setItem("refreshToken", data.data.refreshToken);
       set({ user: data.data.user, isAuthenticated: true });
+      return data.data.user;
     } finally {
       set({ isLoading: false });
     }

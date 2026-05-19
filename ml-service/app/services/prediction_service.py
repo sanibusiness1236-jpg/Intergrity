@@ -2,8 +2,6 @@
 
 from typing import Any, Optional
 
-from torch_geometric.data import Data
-
 from app.config import AppMode, settings
 from app.data.graph_builder import build_graph_from_live_data
 from app.data.mock_generator import generate_mock_venue
@@ -16,17 +14,30 @@ def run_prediction(
     """
     Run integrity prediction on a venue.
 
-    In test mode, generates a mock venue.
-    In production mode, builds a graph from the provided payload.
+    Resolution rules:
+      * If a venue payload with students is supplied, ALWAYS use it (live mode).
+        This is what the examiner UI uses to score real exam sessions, even when
+        the service is started in TEST mode for development convenience.
+      * Otherwise, fall back to a freshly-generated mock venue so the dashboard
+        still has something to demo / benchmark against.
+      * Production mode without a payload is an explicit error.
     """
-    if settings.mode == AppMode.TEST:
-        data = generate_mock_venue()
-        student_ids = [f"mock_student_{i}" for i in range(data.num_nodes)]
-    else:
-        if venue_payload is None:
-            raise ValueError("Production mode requires venue_payload")
+    has_live_data = (
+        venue_payload is not None
+        and isinstance(venue_payload.get("students"), list)
+        and len(venue_payload["students"]) > 0
+    )
+
+    if has_live_data:
         data = build_graph_from_live_data(venue_payload)
         student_ids = data.student_ids
+        data_source = "live"
+    else:
+        if settings.mode == AppMode.PRODUCTION:
+            raise ValueError("Production mode requires venue_payload with students")
+        data = generate_mock_venue()
+        student_ids = [f"mock_student_{i}" for i in range(data.num_nodes)]
+        data_source = "mock"
 
     model = model_registry.active_model
     probs = model.predict(data)
@@ -45,6 +56,7 @@ def run_prediction(
     return {
         "model_used": model_registry.active_name.value,
         "mode": settings.mode.value,
+        "data_source": data_source,
         "num_students": data.num_nodes,
         "num_flagged": flagged_count,
         "num_clean": data.num_nodes - flagged_count,

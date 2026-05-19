@@ -10,10 +10,12 @@ interface ExamState {
   fetchExams: (params?: Record<string, string>) => Promise<void>;
   fetchExam: (id: string) => Promise<void>;
   createExam: (data: Partial<Exam>) => Promise<Exam>;
-  updateExam: (id: string, data: Partial<Exam>) => Promise<void>;
+  updateExam: (id: string, data: Partial<Exam>) => Promise<Exam>;
   deleteExam: (id: string) => Promise<void>;
   publishExam: (id: string) => Promise<void>;
-  addQuestion: (examId: string, question: Partial<Question>) => Promise<void>;
+  addQuestion: (examId: string, question: Partial<Question>) => Promise<Question>;
+  updateQuestion: (questionId: string, data: Partial<Question>) => Promise<Question>;
+  deleteQuestion: (questionId: string) => Promise<void>;
   addBulkQuestions: (examId: string, questions: Partial<Question>[]) => Promise<void>;
 }
 
@@ -50,7 +52,11 @@ export const useExamStore = create<ExamState>((set) => ({
 
   updateExam: async (id, examData) => {
     const { data } = await api.put(`/exams/${id}`, examData);
-    set((s) => ({ exams: s.exams.map((e) => (e.id === id ? data.data : e)) }));
+    set((s) => ({
+      exams: s.exams.map((e) => (e.id === id ? { ...e, ...data.data } : e)),
+      currentExam: s.currentExam?.id === id ? { ...s.currentExam, ...data.data } : s.currentExam,
+    }));
+    return data.data;
   },
 
   deleteExam: async (id) => {
@@ -64,10 +70,32 @@ export const useExamStore = create<ExamState>((set) => ({
   },
 
   addQuestion: async (examId, question) => {
-    await api.post(`/questions/exam/${examId}`, question);
+    const { data } = await api.post(`/questions/exam/${examId}`, question);
+    try {
+      const { data: list } = await api.get("/exams");
+      set({ exams: list.data });
+    } catch {}
+    return data.data;
+  },
+
+  updateQuestion: async (questionId, q) => {
+    const { data } = await api.put(`/questions/${questionId}`, q);
+    return data.data;
+  },
+
+  deleteQuestion: async (questionId) => {
+    await api.delete(`/questions/${questionId}`);
+    try {
+      const { data: list } = await api.get("/exams");
+      set({ exams: list.data });
+    } catch {}
   },
 
   addBulkQuestions: async (examId, questions) => {
     await api.post(`/questions/exam/${examId}/bulk`, { questions });
+    try {
+      const { data } = await api.get("/exams");
+      set({ exams: data.data });
+    } catch {}
   },
 }));

@@ -3,6 +3,12 @@ const prisma = require("../../config/db");
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../../utils/jwt");
 const { AppError } = require("../../middleware/errorHandler");
 
+function blankToNull(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  return v;
+}
+
 async function register(req, res, next) {
   try {
     const { email, password, firstName, lastName, role, institutionId, studentId, program, gender } = req.body;
@@ -10,6 +16,20 @@ async function register(req, res, next) {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       throw new AppError("Email already registered", 409);
+    }
+
+    const isStudent = role === "STUDENT";
+
+    const normalizedStudentId = isStudent ? blankToNull(studentId) : null;
+    const normalizedProgram = isStudent ? blankToNull(program) : null;
+    const normalizedGender = isStudent ? blankToNull(gender) : null;
+    const normalizedInstitutionId = blankToNull(institutionId);
+
+    if (isStudent && normalizedStudentId) {
+      const dup = await prisma.user.findUnique({ where: { studentId: normalizedStudentId } });
+      if (dup) {
+        throw new AppError("That student ID is already in use", 409);
+      }
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -21,10 +41,10 @@ async function register(req, res, next) {
         firstName,
         lastName,
         role,
-        institutionId,
-        studentId,
-        program,
-        gender,
+        institutionId: normalizedInstitutionId,
+        studentId: normalizedStudentId,
+        program: normalizedProgram,
+        gender: normalizedGender,
       },
       select: { id: true, email: true, firstName: true, lastName: true, role: true },
     });
@@ -38,6 +58,10 @@ async function register(req, res, next) {
       data: { user, accessToken, refreshToken },
     });
   } catch (err) {
+    if (err && err.code === "P2002") {
+      const fields = Array.isArray(err.meta?.target) ? err.meta.target.join(", ") : err.meta?.target || "field";
+      return next(new AppError(`That ${fields} is already in use`, 409));
+    }
     next(err);
   }
 }
