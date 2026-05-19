@@ -41,8 +41,5 @@ coverage/
 .pytest_cache/
 htmlcov/
 
-# Prisma
-backend/prisma/migrations/
-
 # Misc
 *.tsbuildinfo
