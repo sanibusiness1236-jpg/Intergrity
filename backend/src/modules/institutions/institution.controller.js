@@ -1,7 +1,6 @@
-const path = require("path");
-const fs = require("fs");
 const prisma = require("../../config/db");
 const { AppError } = require("../../middleware/errorHandler");
+const { getSupabaseClient, logoBucket } = require("../../config/supabase");
 
 const BRANDING_FIELDS = [
   "name",
@@ -20,6 +19,21 @@ function pickBrandingFields(body) {
     if (body[f] !== undefined) data[f] = body[f];
   }
   return data;
+}
+
+function extensionFromMime(mime) {
+  switch (mime) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpg";
+    case "image/svg+xml":
+      return "svg";
+    case "image/webp":
+      return "webp";
+    default:
+      return "png";
+  }
 }
 
 async function createInstitution(req, res, next) {
@@ -89,7 +103,29 @@ async function updateInstitution(req, res, next) {
 async function uploadLogo(req, res, next) {
   try {
     if (!req.file) throw new AppError("No file uploaded", 400);
-    const publicUrl = `/uploads/logos/${req.file.filename}`;
+
+    const ext = extensionFromMime(req.file.mimetype);
+    const objectPath = `${req.params.id}/${Date.now()}.${ext}`;
+
+    const supabase = getSupabaseClient();
+    const { error: uploadError } = await supabase.storage
+      .from(logoBucket)
+      .upload(objectPath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true,
+        cacheControl: "3600",
+      });
+
+    if (uploadError) {
+      throw new AppError(`Logo upload failed: ${uploadError.message}`, 500);
+    }
+
+    const { data: publicUrlData } = supabase.storage.from(logoBucket).getPublicUrl(objectPath);
+    const publicUrl = publicUrlData?.publicUrl;
+    if (!publicUrl) {
+      throw new AppError("Logo uploaded but public URL could not be resolved", 500);
+    }
+
     const inst = await prisma.institution.update({
       where: { id: req.params.id },
       data: { logoUrl: publicUrl },
@@ -100,9 +136,6 @@ async function uploadLogo(req, res, next) {
   }
 }
 
-const uploadsDir = path.join(__dirname, "..", "..", "..", "uploads", "logos");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
 module.exports = {
   createInstitution,
   getInstitutions,
@@ -110,5 +143,4 @@ module.exports = {
   getMyInstitution,
   updateInstitution,
   uploadLogo,
-  uploadsDir,
 };

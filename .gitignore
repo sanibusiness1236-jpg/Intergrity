@@ -28,7 +28,8 @@ build/
 Thumbs.db
 
 # ML artifacts
-ml-service/trained_models/*.pt
+# Note: trained_models/*.pt files ARE committed so HF Spaces does not
+# retrain GNNs on every cold start. They are small (~50 KB total).
 ml-service/static/*.png
 ml-service/dataset_cache/
 

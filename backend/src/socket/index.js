@@ -1,12 +1,13 @@
 const { Server } = require("socket.io");
 const { setupExamSession } = require("./examSession");
 const { setupMonitoring } = require("./monitoring");
+const { corsOrigin } = require("../config/env");
 
 let io;
 
 function initSocket(server) {
   io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: { origin: corsOrigin, methods: ["GET", "POST"], credentials: true },
   });
 
   io.on("connection", (socket) => {
