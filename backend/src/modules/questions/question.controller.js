@@ -4,13 +4,19 @@ const { AppError } = require("../../middleware/errorHandler");
 async function addQuestion(req, res, next) {
   try {
     const { examId } = req.params;
-    const { type, text, options, correctAnswer, marks, order, explanation } = req.body;
+    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
 
     const exam = await prisma.exam.findUnique({ where: { id: examId } });
     if (!exam) throw new AppError("Exam not found", 404);
 
     const question = await prisma.question.create({
-      data: { examId, type, text, options, correctAnswer, marks: marks || 1, order: order || 0, explanation },
+      data: {
+        examId, type, text, options, correctAnswer,
+        marks: marks != null ? parseFloat(marks) : 1,
+        order: order || 0,
+        explanation,
+        fillInBlankType: type === "FILL_IN_BLANK" ? (fillInBlankType || "text") : null,
+      },
     });
 
     await prisma.exam.update({
@@ -41,9 +47,10 @@ async function addBulkQuestions(req, res, next) {
             text: q.text,
             options: q.options,
             correctAnswer: q.correctAnswer,
-            marks: q.marks || 1,
+            marks: q.marks != null ? parseFloat(q.marks) : 1,
             order: q.order ?? i,
             explanation: q.explanation,
+            fillInBlankType: q.type === "FILL_IN_BLANK" ? (q.fillInBlankType || "text") : null,
           },
         })
       )
@@ -78,23 +85,24 @@ async function updateQuestion(req, res, next) {
     const existing = await prisma.question.findUnique({ where: { id: req.params.id } });
     if (!existing) throw new AppError("Question not found", 404);
 
-    const { type, text, options, correctAnswer, marks, order, explanation } = req.body;
+    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
     const data = {};
     if (type !== undefined) data.type = type;
     if (text !== undefined) data.text = text;
     if (options !== undefined) data.options = options;
     if (correctAnswer !== undefined) data.correctAnswer = correctAnswer;
-    if (marks !== undefined) data.marks = marks;
+    if (marks !== undefined) data.marks = parseFloat(marks);
     if (order !== undefined) data.order = order;
     if (explanation !== undefined) data.explanation = explanation;
+    if (fillInBlankType !== undefined) data.fillInBlankType = fillInBlankType;
 
     const question = await prisma.question.update({
       where: { id: req.params.id },
       data,
     });
 
-    if (marks !== undefined && marks !== existing.marks) {
-      const delta = marks - existing.marks;
+    if (marks !== undefined && parseFloat(marks) !== existing.marks) {
+      const delta = parseFloat(marks) - existing.marks;
       await prisma.exam.update({
         where: { id: existing.examId },
         data: { totalMarks: { increment: delta } },

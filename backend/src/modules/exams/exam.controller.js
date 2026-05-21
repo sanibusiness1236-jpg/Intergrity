@@ -25,20 +25,28 @@ async function resolveInstitutionId(userId, explicitId) {
 async function createExam(req, res, next) {
   try {
     const {
-      title, description, courseCode, courseName, durationMinutes,
-      startTime, endTime, totalMarks, passingMarks, shuffleQuestions,
-      allowBacktrack, institutionId,
+      title, description, instructions, courseCode, courseName,
+      examType, examTypeOther, examPassword,
+      durationMinutes, startTime, endTime, totalMarks,
+      shuffleQuestions, allowBacktrack, institutionId,
     } = req.body;
 
     const resolvedInstId = await resolveInstitutionId(req.user.id, institutionId);
 
     const exam = await prisma.exam.create({
       data: {
-        title, description, courseCode, courseName, durationMinutes,
+        title,
+        description,
+        instructions,
+        courseCode,
+        courseName,
+        examType: examType || "QUIZ",
+        examTypeOther: examType === "OTHER" ? examTypeOther : null,
+        examPassword: examPassword || null,
+        durationMinutes,
         startTime: startTime ? new Date(startTime) : null,
         endTime: endTime ? new Date(endTime) : null,
         totalMarks: totalMarks || 0,
-        passingMarks: passingMarks || 0,
         shuffleQuestions: shuffleQuestions || false,
         allowBacktrack: allowBacktrack !== false,
         createdById: req.user.id,
@@ -69,12 +77,37 @@ async function getExams(req, res, next) {
       where,
       include: {
         createdBy: { select: { id: true, firstName: true, lastName: true } },
-        _count: { select: { questions: true, examSessions: true } },
+        _count: {
+          select: {
+            questions: true,
+            examSessions: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    res.json({ success: true, data: exams });
+    // Attach submitted count to each exam
+    const examIds = exams.map((e) => e.id);
+    const submittedCounts = await prisma.examSession.groupBy({
+      by: ["examId"],
+      where: {
+        examId: { in: examIds },
+        status: "SUBMITTED",
+      },
+      _count: { id: true },
+    });
+    const submittedMap = Object.fromEntries(submittedCounts.map((r) => [r.examId, r._count.id]));
+
+    const enriched = exams.map((e) => ({
+      ...e,
+      _count: {
+        ...e._count,
+        submittedSessions: submittedMap[e.id] || 0,
+      },
+    }));
+
+    res.json({ success: true, data: enriched });
   } catch (err) {
     next(err);
   }
@@ -92,7 +125,19 @@ async function getExam(req, res, next) {
       },
     });
     if (!exam) throw new AppError("Exam not found", 404);
-    res.json({ success: true, data: exam });
+
+    // Count submitted sessions
+    const submittedCount = await prisma.examSession.count({
+      where: { examId: req.params.id, status: "SUBMITTED" },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...exam,
+        _count: { ...exam._count, submittedSessions: submittedCount },
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -106,9 +151,33 @@ async function updateExam(req, res, next) {
       throw new AppError("Not authorised", 403);
     }
 
+    const {
+      title, description, instructions, courseCode, courseName,
+      examType, examTypeOther, examPassword,
+      durationMinutes, startTime, endTime,
+      shuffleQuestions, allowBacktrack,
+    } = req.body;
+
+    const data = {};
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description;
+    if (instructions !== undefined) data.instructions = instructions;
+    if (courseCode !== undefined) data.courseCode = courseCode;
+    if (courseName !== undefined) data.courseName = courseName;
+    if (examType !== undefined) {
+      data.examType = examType;
+      data.examTypeOther = examType === "OTHER" ? (examTypeOther || null) : null;
+    }
+    if (examPassword !== undefined) data.examPassword = examPassword || null;
+    if (durationMinutes !== undefined) data.durationMinutes = durationMinutes;
+    if (startTime !== undefined) data.startTime = startTime ? new Date(startTime) : null;
+    if (endTime !== undefined) data.endTime = endTime ? new Date(endTime) : null;
+    if (shuffleQuestions !== undefined) data.shuffleQuestions = shuffleQuestions;
+    if (allowBacktrack !== undefined) data.allowBacktrack = allowBacktrack;
+
     const updated = await prisma.exam.update({
       where: { id: req.params.id },
-      data: req.body,
+      data,
     });
     res.json({ success: true, data: updated });
   } catch (err) {

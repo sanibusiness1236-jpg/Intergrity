@@ -30,6 +30,14 @@ enum QuestionType {
   MULTI_BLANK_EQUATION
 }
 
+enum ExamType {
+  QUIZ
+  MIDSEMESTER
+  ASSIGNMENT
+  END_OF_SEMESTER
+  OTHER
+}
+
 enum SessionStatus {
   WAITING
   IN_PROGRESS
@@ -93,29 +101,32 @@ model User {
 }
 
 model Exam {
-  id             String     @id @default(uuid())
-  title          String
-  description    String?
-  courseCode     String
-  courseName     String
-  status         ExamStatus @default(DRAFT)
-  durationMinutes Int
-  startTime      DateTime?
-  endTime        DateTime?
-  totalMarks     Int        @default(0)
-  passingMarks   Int        @default(0)
-  shuffleQuestions Boolean  @default(false)
-  allowBacktrack  Boolean   @default(true)
-  createdById    String
-  createdBy      User       @relation("ExamCreator", fields: [createdById], references: [id])
-  institutionId  String
-  institution    Institution @relation(fields: [institutionId], references: [id])
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id               String     @id @default(uuid())
+  title            String
+  description      String?
+  instructions     String?
+  courseCode       String
+  courseName       String
+  examType         ExamType   @default(QUIZ)
+  examTypeOther    String?
+  examPassword     String?
+  status           ExamStatus @default(DRAFT)
+  durationMinutes  Int
+  startTime        DateTime?
+  endTime          DateTime?
+  totalMarks       Float      @default(0)
+  shuffleQuestions Boolean    @default(false)
+  allowBacktrack   Boolean    @default(true)
+  createdById      String
+  createdBy        User       @relation("ExamCreator", fields: [createdById], references: [id])
+  institutionId    String
+  institution      Institution @relation(fields: [institutionId], references: [id])
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  questions      Question[]
-  examSessions   ExamSession[]
-  venues         Venue[]
+  questions            Question[]
+  examSessions         ExamSession[]
+  venues               Venue[]
   integrityPredictions IntegrityPrediction[]
 
   @@map("exams")
@@ -129,7 +140,8 @@ model Question {
   text         String
   options      Json?
   correctAnswer Json
-  marks        Int          @default(1)
+  marks        Float        @default(1)
+  fillInBlankType String?
   order        Int          @default(0)
   explanation  String?
   createdAt    DateTime     @default(now())
@@ -181,8 +193,8 @@ model ExamSession {
   submittedAt     DateTime?
   ipAddress       String?
   userAgent       String?
-  score           Int?
-  maxScore        Int?
+  score           Float?
+  maxScore        Float?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 

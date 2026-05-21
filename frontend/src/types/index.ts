@@ -21,25 +21,29 @@ export interface Institution {
 
 export type ExamStatus = "DRAFT" | "PUBLISHED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 export type QuestionType = "MCQ" | "TRUE_FALSE" | "FILL_IN_BLANK" | "MULTI_BLANK_EQUATION";
+export type ExamType = "QUIZ" | "MIDSEMESTER" | "ASSIGNMENT" | "END_OF_SEMESTER" | "OTHER";
 
 export interface Exam {
   id: string;
   title: string;
   description?: string;
+  instructions?: string;
   courseCode: string;
   courseName: string;
+  examType: ExamType;
+  examTypeOther?: string;
+  examPassword?: string;
   status: ExamStatus;
   durationMinutes: number;
   startTime?: string;
   endTime?: string;
   totalMarks: number;
-  passingMarks: number;
   shuffleQuestions: boolean;
   allowBacktrack: boolean;
   createdById: string;
   institutionId: string;
   questions?: Question[];
-  _count?: { questions: number; examSessions: number };
+  _count?: { questions: number; examSessions: number; submittedSessions: number };
 }
 
 export interface Question {
@@ -52,6 +56,7 @@ export interface Question {
   marks: number;
   order: number;
   explanation?: string;
+  fillInBlankType?: "text" | "dropdown";
 }
 
 export type SessionStatus = "WAITING" | "IN_PROGRESS" | "SUBMITTED" | "TIMED_OUT" | "DISCONNECTED";

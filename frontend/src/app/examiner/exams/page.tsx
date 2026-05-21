@@ -8,7 +8,7 @@ import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/Das
 import { AnnouncementBadge } from "@/components/dashboard/AnnouncementBadge";
 import { GradientHeading } from "@/components/dashboard/GradientHeading";
 import { StatCard } from "@/components/dashboard/StatCard";
-import type { Exam, ExamStatus } from "@/types";
+import type { Exam, ExamStatus, ExamType } from "@/types";
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-white/10 text-white/70 border-white/15",
@@ -29,10 +29,18 @@ const STATUS_DOT: Record<string, string> = {
 const SECTION_ORDER: ExamStatus[] = ["ACTIVE", "PUBLISHED", "DRAFT", "COMPLETED", "CANCELLED"];
 const SECTION_LABEL: Record<ExamStatus, string> = {
   ACTIVE: "Active now",
-  PUBLISHED: "Published",
+  PUBLISHED: "Uploaded Exams",
   DRAFT: "Drafts",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
+};
+
+const EXAM_TYPE_LABELS: Record<ExamType, string> = {
+  QUIZ: "Quiz",
+  MIDSEMESTER: "Midsemester",
+  ASSIGNMENT: "Assignment",
+  END_OF_SEMESTER: "End of Semester",
+  OTHER: "Other",
 };
 
 const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
@@ -47,7 +55,8 @@ interface FormState {
   courseName: string;
   description: string;
   durationMinutes: number;
-  passingMarks: number;
+  examType: ExamType;
+  examTypeOther: string;
   shuffleQuestions: boolean;
   allowBacktrack: boolean;
 }
@@ -58,7 +67,8 @@ const EMPTY_FORM: FormState = {
   courseName: "",
   description: "",
   durationMinutes: 60,
-  passingMarks: 50,
+  examType: "QUIZ",
+  examTypeOther: "",
   shuffleQuestions: false,
   allowBacktrack: true,
 };
@@ -92,14 +102,17 @@ export default function ExamsListPage() {
     fetchExams();
   }, [fetchExams]);
 
-  const stats = useMemo(() => {
-    return {
-      total: exams.length,
-      draft: exams.filter((e) => e.status === "DRAFT").length,
-      published: exams.filter((e) => e.status === "PUBLISHED").length,
-      active: exams.filter((e) => e.status === "ACTIVE").length,
-    };
-  }, [exams]);
+  const stats = useMemo(() => ({
+    total: exams.length,
+    draft: exams.filter((e) => e.status === "DRAFT").length,
+    uploaded: exams.filter((e) => e.status === "PUBLISHED").length,
+    active: exams.filter((e) => e.status === "ACTIVE").length,
+  }), [exams]);
+
+  const ongoingExams = useMemo(
+    () => exams.filter((e) => e.status === "ACTIVE"),
+    [exams]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -138,6 +151,7 @@ export default function ExamsListPage() {
     try {
       const created = await createExam({
         ...form,
+        examTypeOther: form.examType === "OTHER" ? form.examTypeOther : undefined,
         totalMarks: 0,
         startTime: new Date(Date.now() + 60_000).toISOString(),
         endTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
@@ -163,7 +177,7 @@ export default function ExamsListPage() {
             <GradientHeading
               title="Exam Builder"
               highlight="Create &"
-              subtitle="Author your exams the way you would in Canvas — author details, add typed questions, fine-tune behavior, and preview before publishing."
+              subtitle="Author your exams — add typed questions, fine-tune behavior, and preview before uploading."
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -184,9 +198,39 @@ export default function ExamsListPage() {
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <StatCard label="Total exams" value={stats.total} accent="indigo" icon={<Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />} />
           <StatCard label="Draft" value={stats.draft} accent="amber" icon={<Icon d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />} />
-          <StatCard label="Published" value={stats.published} accent="emerald" icon={<Icon d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />} />
+          <StatCard label="Uploaded" value={stats.uploaded} accent="emerald" icon={<Icon d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />} />
           <StatCard label="Live now" value={stats.active} accent="rose" icon={<Icon d="M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z" />} />
         </div>
+
+        {/* Ongoing exams panel */}
+        {ongoingExams.length > 0 && (
+          <GlowCard title="Ongoing Exams" description="Exams currently active and accepting submissions.">
+            <div className="space-y-2">
+              {ongoingExams.map((exam) => {
+                const submitted = exam._count?.submittedSessions ?? 0;
+                const total = exam._count?.examSessions ?? 0;
+                return (
+                  <button
+                    key={exam.id}
+                    onClick={() => router.push(`/examiner/exams/${exam.id}`)}
+                    className="group flex w-full items-center gap-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-left transition hover:border-amber-500/40 hover:bg-amber-500/10"
+                  >
+                    <span className="flex h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400 ring-4 ring-amber-400/20 animate-pulse" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-white">{exam.title}</p>
+                      <p className="text-xs text-white/40">{exam.courseCode} · {exam.durationMinutes} min</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-bold text-emerald-300">{submitted}</p>
+                      <p className="text-[11px] text-white/40">submitted / {total} enrolled</p>
+                    </div>
+                    <Icon d="M9 5l7 7-7 7" />
+                  </button>
+                );
+              })}
+            </div>
+          </GlowCard>
+        )}
 
         {/* Toolbar */}
         <GlowCard className="!p-4">
@@ -223,7 +267,6 @@ export default function ExamsListPage() {
           </div>
         </GlowCard>
 
-        {/* List */}
         {isLoading && exams.length === 0 && (
           <GlowCard className="text-center text-sm text-white/40">Loading exams…</GlowCard>
         )}
@@ -338,6 +381,18 @@ export default function ExamsListPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Exam type</label>
+                    <select
+                      className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                      value={form.examType}
+                      onChange={(e) => setForm({ ...form, examType: e.target.value as ExamType })}
+                    >
+                      {(Object.entries(EXAM_TYPE_LABELS) as [ExamType, string][]).map(([val, label]) => (
+                        <option key={val} value={val} className="bg-slate-900">{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (min)</label>
                     <input
                       type="number"
@@ -348,18 +403,19 @@ export default function ExamsListPage() {
                       required
                     />
                   </div>
+                </div>
+                {form.examType === "OTHER" && (
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Passing marks</label>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Specify exam type</label>
                     <input
-                      type="number"
-                      min={0}
                       className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                      value={form.passingMarks}
-                      onChange={(e) => setForm({ ...form, passingMarks: parseInt(e.target.value) || 0 })}
+                      value={form.examTypeOther}
+                      onChange={(e) => setForm({ ...form, examTypeOther: e.target.value })}
+                      placeholder="e.g. Practical Assessment"
                       required
                     />
                   </div>
-                </div>
+                )}
                 {createError && (
                   <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{createError}</div>
                 )}
@@ -388,8 +444,9 @@ export default function ExamsListPage() {
           <div
             key={t.id}
             className={`pointer-events-auto rounded-lg border px-4 py-3 text-sm shadow-2xl backdrop-blur-md ${
-              t.type === "success" ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200" :
-              "border-rose-500/40 bg-rose-500/15 text-rose-200"
+              t.type === "success"
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+                : "border-rose-500/40 bg-rose-500/15 text-rose-200"
             }`}
           >
             {t.message}
@@ -408,13 +465,17 @@ function ExamRow({ exam, last, onOpen }: { exam: Exam; last: boolean; onOpen: ()
       dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : "No schedule";
 
+  const submitted = exam._count?.submittedSessions ?? 0;
+
   return (
     <button
       onClick={onOpen}
       className={`group flex w-full items-center gap-4 px-4 py-3.5 text-left transition hover:bg-white/[0.04] ${last ? "" : "border-b border-white/5"}`}
     >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-indigo-300 transition group-hover:border-indigo-400/30 group-hover:bg-indigo-500/10">
-        <Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" size={18} />
+        <svg viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+        </svg>
       </div>
 
       <div className="min-w-0 flex-1">
@@ -422,6 +483,14 @@ function ExamRow({ exam, last, onOpen }: { exam: Exam; last: boolean; onOpen: ()
           <span className="font-mono text-[11px] text-indigo-300">{exam.courseCode}</span>
           <span className="text-white/20">·</span>
           <span className="truncate text-xs text-white/50">{exam.courseName}</span>
+          {exam.examType && (
+            <>
+              <span className="text-white/20">·</span>
+              <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/40">
+                {exam.examType === "OTHER" && exam.examTypeOther ? exam.examTypeOther : (exam.examType === "END_OF_SEMESTER" ? "End of Sem." : exam.examType.charAt(0) + exam.examType.slice(1).toLowerCase().replace("_", " "))}
+              </span>
+            </>
+          )}
         </div>
         <p className="mt-0.5 truncate text-sm font-semibold text-white">{exam.title}</p>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/40">
@@ -432,10 +501,10 @@ function ExamRow({ exam, last, onOpen }: { exam: Exam; last: boolean; onOpen: ()
           <span>{exam._count?.questions ?? 0} question{(exam._count?.questions ?? 0) !== 1 ? "s" : ""}</span>
           <span>·</span>
           <span>{exam.totalMarks} pts</span>
-          {(exam._count?.examSessions ?? 0) > 0 && (
+          {submitted > 0 && (
             <>
               <span>·</span>
-              <span className="text-emerald-300/80">{exam._count?.examSessions} session{exam._count?.examSessions !== 1 ? "s" : ""}</span>
+              <span className="text-emerald-300/80">{submitted} submitted</span>
             </>
           )}
         </div>
@@ -444,10 +513,12 @@ function ExamRow({ exam, last, onOpen }: { exam: Exam; last: boolean; onOpen: ()
       <div className="flex shrink-0 items-center gap-3">
         <span className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider sm:inline-flex ${STATUS_TONE[exam.status]}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[exam.status]}`} />
-          {exam.status}
+          {exam.status === "PUBLISHED" ? "Uploaded" : exam.status}
         </span>
         <span className="text-white/30 transition group-hover:translate-x-0.5 group-hover:text-white">
-          <Icon d="M9 5l7 7-7 7" />
+          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 5l7 7-7 7" />
+          </svg>
         </span>
       </div>
     </button>

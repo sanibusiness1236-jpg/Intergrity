@@ -12,7 +12,7 @@ import {
   QTYPE_TONE,
   QTYPE_ICON,
 } from "@/components/exams/QuestionEditor";
-import type { Exam, Question, QuestionType } from "@/types";
+import type { Exam, ExamType, Question, QuestionType } from "@/types";
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-white/10 text-white/70 border-white/15",
@@ -20,6 +20,14 @@ const STATUS_TONE: Record<string, string> = {
   ACTIVE: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   COMPLETED: "bg-slate-500/15 text-slate-300 border-slate-500/30",
   CANCELLED: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+};
+
+const EXAM_TYPE_LABELS: Record<ExamType, string> = {
+  QUIZ: "Quiz",
+  MIDSEMESTER: "Midsemester",
+  ASSIGNMENT: "Assignment",
+  END_OF_SEMESTER: "End of Semester",
+  OTHER: "Other",
 };
 
 const TABS = [
@@ -35,11 +43,7 @@ const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
   </svg>
 );
 
-interface Toast {
-  id: string;
-  type: "success" | "error" | "info";
-  message: string;
-}
+interface Toast { id: string; type: "success" | "error" | "info"; message: string; }
 
 export default function ExamEditorPage() {
   const params = useParams();
@@ -81,9 +85,7 @@ export default function ExamEditorPage() {
     }
   }
 
-  useEffect(() => {
-    if (examId) loadExam();
-  }, [examId]);
+  useEffect(() => { if (examId) loadExam(); }, [examId]);
 
   function switchTab(tab: string) {
     setActiveTab(tab);
@@ -95,15 +97,15 @@ export default function ExamEditorPage() {
   async function handlePublish() {
     if (!exam) return;
     if (questions.length === 0) {
-      pushToast("error", "Add at least one question before publishing");
+      pushToast("error", "Add at least one question before uploading");
       return;
     }
     try {
       await publishExam(exam.id);
-      pushToast("success", "Exam published");
+      pushToast("success", "Exam uploaded");
       await loadExam();
     } catch (e: any) {
-      pushToast("error", e.response?.data?.error?.message || "Publish failed");
+      pushToast("error", e.response?.data?.error?.message || "Upload failed");
     }
   }
 
@@ -112,7 +114,6 @@ export default function ExamEditorPage() {
     if (!confirm(`Delete exam "${exam.title}"? This cannot be undone.`)) return;
     try {
       await deleteExam(exam.id);
-      pushToast("success", "Exam deleted");
       router.push("/examiner/exams");
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Delete failed");
@@ -142,6 +143,11 @@ export default function ExamEditorPage() {
     );
   }
 
+  const submitted = exam._count?.submittedSessions ?? 0;
+  const examTypeLabel = exam.examType === "OTHER" && exam.examTypeOther
+    ? exam.examTypeOther
+    : EXAM_TYPE_LABELS[exam.examType] ?? exam.examType;
+
   return (
     <DashboardShell>
       <div className="space-y-6">
@@ -161,6 +167,7 @@ export default function ExamEditorPage() {
                 <span className="font-mono text-xs text-indigo-300">{exam.courseCode}</span>
                 <span className="text-white/30">·</span>
                 <span className="text-xs text-white/50">{exam.courseName}</span>
+                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/40">{examTypeLabel}</span>
                 <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${STATUS_TONE[exam.status] || STATUS_TONE.DRAFT}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${
                     exam.status === "PUBLISHED" ? "bg-emerald-400" :
@@ -168,13 +175,16 @@ export default function ExamEditorPage() {
                     exam.status === "COMPLETED" ? "bg-slate-400" :
                     exam.status === "CANCELLED" ? "bg-rose-400" : "bg-white/40"
                   }`} />
-                  {exam.status}
+                  {exam.status === "PUBLISHED" ? "Uploaded" : exam.status}
                 </span>
+                {exam.examPassword && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                    <Icon d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" size={10} />
+                    Password protected
+                  </span>
+                )}
               </div>
               <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{exam.title}</h1>
-              {exam.description && (
-                <p className="max-w-3xl text-sm text-white/50">{exam.description}</p>
-              )}
               <div className="flex flex-wrap items-center gap-4 text-xs text-white/50">
                 <span className="flex items-center gap-1.5">
                   <Icon d="M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z" />
@@ -186,8 +196,14 @@ export default function ExamEditorPage() {
                 </span>
                 <span className="flex items-center gap-1.5">
                   <Icon d="M12 6v6l4 2M12 2a10 10 0 100 20 10 10 0 000-20z" />
-                  {exam.totalMarks} pts total · {exam.passingMarks} to pass
+                  {exam.totalMarks} pts total
                 </span>
+                {submitted > 0 && (
+                  <span className="flex items-center gap-1.5 text-emerald-300">
+                    <Icon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    {submitted} submitted
+                  </span>
+                )}
               </div>
             </div>
 
@@ -197,7 +213,7 @@ export default function ExamEditorPage() {
               </Link>
               {exam.status === "DRAFT" && (
                 <GlowButton variant="gradient" size="sm" onClick={handlePublish}>
-                  Publish
+                  Upload Exam
                 </GlowButton>
               )}
               <button
@@ -218,9 +234,7 @@ export default function ExamEditorPage() {
                 key={t.id}
                 onClick={() => switchTab(t.id)}
                 className={`group relative inline-flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-medium transition ${
-                  activeTab === t.id
-                    ? "text-white"
-                    : "text-white/50 hover:text-white/80"
+                  activeTab === t.id ? "text-white" : "text-white/50 hover:text-white/80"
                 }`}
               >
                 <Icon d={t.icon} />
@@ -299,19 +313,32 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
     courseCode: exam.courseCode,
     courseName: exam.courseName,
     description: exam.description || "",
+    instructions: exam.instructions || "",
+    examType: exam.examType || "QUIZ" as ExamType,
+    examTypeOther: exam.examTypeOther || "",
+    examPassword: exam.examPassword || "",
   });
   const [saving, setSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const dirty =
     form.title !== exam.title ||
     form.courseCode !== exam.courseCode ||
     form.courseName !== exam.courseName ||
-    (form.description || "") !== (exam.description || "");
+    (form.description || "") !== (exam.description || "") ||
+    (form.instructions || "") !== (exam.instructions || "") ||
+    form.examType !== (exam.examType || "QUIZ") ||
+    (form.examTypeOther || "") !== (exam.examTypeOther || "") ||
+    (form.examPassword || "") !== (exam.examPassword || "");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    await onSave(form);
+    await onSave({
+      ...form,
+      examTypeOther: form.examType === "OTHER" ? form.examTypeOther : "",
+      examPassword: form.examPassword || null as any,
+    });
     setSaving(false);
   }
 
@@ -319,6 +346,7 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
     <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <GlowCard className="lg:col-span-2">
         <div className="space-y-5">
+          {/* Title */}
           <div className="space-y-2">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Exam Title</label>
             <input
@@ -328,6 +356,8 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
               required
             />
           </div>
+
+          {/* Course code + name */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Course Code</label>
@@ -348,17 +378,91 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
               />
             </div>
           </div>
+
+          {/* Exam type */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Exam Type</label>
+              <select
+                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                value={form.examType}
+                onChange={(e) => setForm({ ...form, examType: e.target.value as ExamType })}
+              >
+                {(Object.entries(EXAM_TYPE_LABELS) as [ExamType, string][]).map(([val, label]) => (
+                  <option key={val} value={val} className="bg-slate-900">{label}</option>
+                ))}
+              </select>
+            </div>
+            {form.examType === "OTHER" && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Specify Type</label>
+                <input
+                  className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                  value={form.examTypeOther}
+                  onChange={(e) => setForm({ ...form, examTypeOther: e.target.value })}
+                  placeholder="e.g. Practical Assessment"
+                  required
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Exam password */}
           <div className="space-y-2">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
-              Description <span className="ml-1 text-white/30">(Instructions shown to students)</span>
+              Exam Password <span className="ml-1 normal-case text-white/30">(optional — students must enter this to begin)</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                className="auth-input h-11 w-full rounded-lg px-3 pr-10 text-sm"
+                value={form.examPassword}
+                onChange={(e) => setForm({ ...form, examPassword: e.target.value })}
+                placeholder="Leave blank for no password"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+              >
+                <Icon d={showPassword ? "M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22" : "M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"} size={15} />
+              </button>
+            </div>
+          </div>
+
+          {/* Description */}
+          <div className="space-y-2">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+              Description <span className="ml-1 text-white/30">(brief summary)</span>
             </label>
             <textarea
-              className="auth-input min-h-[140px] w-full rounded-lg px-3 py-2 text-sm"
+              className="auth-input min-h-[80px] w-full rounded-lg px-3 py-2 text-sm"
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="e.g. Read each question carefully. You may not return to a previous question once submitted."
+              placeholder="e.g. Final assessment for Database Systems covering SQL and normalization."
             />
           </div>
+
+          {/* Instructions */}
+          <div className="space-y-2">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+              Exam Instructions <span className="ml-1 text-white/30">(shown to students before they start)</span>
+            </label>
+            <p className="text-[11px] text-white/30">
+              Use bullet points (start lines with • or -) or numbering (1. 2. 3.) to format vertically.
+            </p>
+            <textarea
+              className="auth-input min-h-[160px] w-full rounded-lg px-3 py-2 text-sm leading-relaxed"
+              value={form.instructions}
+              onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+              placeholder={`e.g.\n1. Read each question carefully before answering.\n2. You may not use external resources.\n3. All answers are final once submitted.\n• Do not switch browser tabs.\n• Ensure your internet connection is stable.`}
+            />
+            <p className="text-[11px] text-white/30">
+              Lines starting with a number + period or • / - will appear as a numbered/bulleted list to students.
+            </p>
+          </div>
+
           <div className="flex items-center justify-end gap-2 border-t border-white/5 pt-4">
             <button
               type="button"
@@ -367,6 +471,10 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
                 courseCode: exam.courseCode,
                 courseName: exam.courseName,
                 description: exam.description || "",
+                instructions: exam.instructions || "",
+                examType: exam.examType || "QUIZ",
+                examTypeOther: exam.examTypeOther || "",
+                examPassword: exam.examPassword || "",
               })}
               disabled={!dirty}
               className="rounded-md border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white/70 transition hover:bg-white/10 disabled:opacity-40"
@@ -380,22 +488,40 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
         </div>
       </GlowCard>
 
+      {/* Sidebar */}
       <div className="space-y-4">
         <GlowCard title="At a glance">
           <dl className="space-y-3 text-sm">
-            <Row label="Status" value={<span className="font-mono text-xs">{exam.status}</span>} />
+            <Row label="Status" value={<span className="font-mono text-xs">{exam.status === "PUBLISHED" ? "Uploaded" : exam.status}</span>} />
+            <Row label="Type" value={exam.examType === "OTHER" && exam.examTypeOther ? exam.examTypeOther : EXAM_TYPE_LABELS[exam.examType] ?? exam.examType} />
             <Row label="Duration" value={`${exam.durationMinutes} min`} />
             <Row label="Total marks" value={exam.totalMarks} />
-            <Row label="Passing marks" value={exam.passingMarks} />
             <Row label="Questions" value={exam._count?.questions ?? "—"} />
-            <Row label="Sessions" value={exam._count?.examSessions ?? 0} />
+            <Row label="Enrolled" value={exam._count?.examSessions ?? 0} />
+            <Row
+              label="Submitted"
+              value={
+                <span className={exam._count?.submittedSessions ? "font-bold text-emerald-300" : ""}>
+                  {exam._count?.submittedSessions ?? 0}
+                </span>
+              }
+            />
+            <Row
+              label="Password"
+              value={exam.examPassword ? (
+                <span className="flex items-center gap-1 text-amber-300">
+                  <Icon d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" size={11} />
+                  Set
+                </span>
+              ) : <span className="text-white/30">None</span>}
+            />
           </dl>
         </GlowCard>
         <GlowCard>
           <p className="text-xs leading-relaxed text-white/50">
-            Use the <span className="text-white">Questions</span> tab to build the exam from the type palette,
+            Use the <span className="text-white">Questions</span> tab to build the exam,
             then configure timing and behavior under <span className="text-white">Settings</span>.
-            Use <span className="text-white">Preview</span> before publishing to verify what students will see.
+            Use <span className="text-white">Preview</span> before uploading to verify what students will see.
           </p>
         </GlowCard>
       </div>
@@ -413,7 +539,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 /* ============================================================ */
-/* Questions Tab — the Canvas-inspired builder                  */
+/* Questions Tab                                                */
 /* ============================================================ */
 
 interface QuestionsTabProps {
@@ -430,8 +556,7 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   const [newQuestionType, setNewQuestionType] = useState<QuestionType | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const locked = examStatus !== "DRAFT";
-
+  // Questions are always editable — removed DRAFT-only lock
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const q of questions) c[q.type] = (c[q.type] || 0) + 1;
@@ -485,14 +610,13 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   async function handleDuplicate(q: Question) {
     setBusy(true);
     try {
-      const payload: Partial<Question> = {
+      await addQuestion(examId, {
         type: q.type,
         text: q.text + " (copy)",
         options: q.options,
         correctAnswer: q.correctAnswer,
         marks: q.marks,
-      };
-      await addQuestion(examId, payload);
+      });
       pushToast("success", "Question duplicated");
       await onChange();
     } catch (e: any) {
@@ -505,13 +629,13 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   const typeCards: { type: QuestionType; description: string }[] = [
     { type: "MCQ", description: "One correct answer from several options" },
     { type: "TRUE_FALSE", description: "Single binary True / False answer" },
-    { type: "FILL_IN_BLANK", description: "Short text or numeric answer" },
+    { type: "FILL_IN_BLANK", description: "Type-in box or dropdown select" },
     { type: "MULTI_BLANK_EQUATION", description: "Multiple blanks with partial credit" },
   ];
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
-      {/* Left rail: Question type palette */}
+      {/* Left rail */}
       <aside className="space-y-4">
         <GlowCard>
           <div className="space-y-3">
@@ -524,18 +648,13 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
                 <button
                   key={tc.type}
                   onClick={() => {
-                    if (locked) {
-                      pushToast("error", "Unpublish the exam to edit questions");
-                      return;
-                    }
                     setNewQuestionType(tc.type);
                     setEditingId(null);
                     setTimeout(() => {
                       document.getElementById("new-question-editor")?.scrollIntoView({ behavior: "smooth", block: "center" });
                     }, 50);
                   }}
-                  disabled={locked}
-                  className={`group flex w-full items-start gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3 text-left transition hover:border-white/20 hover:bg-white/5 disabled:opacity-40 ${
+                  className={`group flex w-full items-start gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3 text-left transition hover:border-white/20 hover:bg-white/5 ${
                     newQuestionType === tc.type ? "border-indigo-400/40 bg-indigo-500/10" : ""
                   }`}
                 >
@@ -575,9 +694,9 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
           </dl>
         </GlowCard>
 
-        {locked && (
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-            Exam is <span className="font-semibold">{examStatus}</span>. Questions are read-only.
+        {examStatus !== "DRAFT" && (
+          <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 text-xs text-indigo-200">
+            Exam is <span className="font-semibold">{examStatus === "PUBLISHED" ? "uploaded" : examStatus.toLowerCase()}</span>. Questions can still be edited.
           </div>
         )}
       </aside>
@@ -590,9 +709,7 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
               <Icon d="M12 4v16m8-8H4" size={22} />
             </div>
             <h3 className="mt-4 text-base font-semibold text-white">No questions yet</h3>
-            <p className="mt-1 text-sm text-white/50">
-              Pick a question type from the palette on the left to get started.
-            </p>
+            <p className="mt-1 text-sm text-white/50">Pick a question type from the palette on the left.</p>
           </GlowCard>
         )}
 
@@ -617,7 +734,7 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
               <QuestionCard
                 question={q}
                 index={i}
-                locked={locked || busy}
+                locked={busy}
                 onEdit={() => setEditingId(q.id)}
                 onDuplicate={() => handleDuplicate(q)}
                 onDelete={() => handleDelete(q.id)}
@@ -632,10 +749,7 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
               <span className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
                 New {QTYPE_LABEL[newQuestionType]} Question
               </span>
-              <button
-                onClick={() => setNewQuestionType(null)}
-                className="text-xs text-white/40 hover:text-white"
-              >
+              <button onClick={() => setNewQuestionType(null)} className="text-xs text-white/40 hover:text-white">
                 Cancel
               </button>
             </div>
@@ -648,12 +762,9 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
           </div>
         )}
 
-        {!locked && questions.length > 0 && !newQuestionType && (
+        {questions.length > 0 && !newQuestionType && (
           <button
-            onClick={() => {
-              setNewQuestionType("MCQ");
-              setEditingId(null);
-            }}
+            onClick={() => { setNewQuestionType("MCQ"); setEditingId(null); }}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 bg-white/[0.02] py-4 text-sm text-white/50 transition hover:border-white/30 hover:bg-white/5 hover:text-white"
           >
             <Icon d="M12 4v16m8-8H4" />
@@ -666,30 +777,17 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
 }
 
 function QuestionCard({
-  question,
-  index,
-  locked,
-  onEdit,
-  onDuplicate,
-  onDelete,
+  question, index, locked, onEdit, onDuplicate, onDelete,
 }: {
-  question: Question;
-  index: number;
-  locked: boolean;
-  onEdit: () => void;
-  onDuplicate: () => void;
-  onDelete: () => void;
+  question: Question; index: number; locked: boolean;
+  onEdit: () => void; onDuplicate: () => void; onDelete: () => void;
 }) {
+  const fibType = (question as any).fillInBlankType;
+
   const correctAnswerDisplay = useMemo(() => {
-    if (question.type === "MCQ") {
-      return String(question.correctAnswer);
-    }
-    if (question.type === "TRUE_FALSE") {
-      return String(question.correctAnswer);
-    }
-    if (question.type === "FILL_IN_BLANK") {
-      return String(question.correctAnswer);
-    }
+    if (question.type === "MCQ") return String(question.correctAnswer);
+    if (question.type === "TRUE_FALSE") return String(question.correctAnswer);
+    if (question.type === "FILL_IN_BLANK") return String(question.correctAnswer);
     if (question.type === "MULTI_BLANK_EQUATION" && Array.isArray(question.correctAnswer)) {
       return (question.correctAnswer as string[]).join(" · ");
     }
@@ -711,6 +809,11 @@ function QuestionCard({
               <Icon d={QTYPE_ICON[question.type]} size={10} />
               {QTYPE_LABEL[question.type]}
             </span>
+            {question.type === "FILL_IN_BLANK" && fibType && (
+              <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/40">
+                {fibType === "dropdown" ? "Dropdown" : "Text box"}
+              </span>
+            )}
           </div>
           <p className="text-sm text-white">{question.text}</p>
 
@@ -719,17 +822,12 @@ function QuestionCard({
               {(question.options as string[]).map((opt, idx) => {
                 const isCorrect = opt === question.correctAnswer;
                 return (
-                  <div
-                    key={idx}
-                    className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
-                      isCorrect ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/5 bg-white/[0.02] text-white/60"
-                    }`}
-                  >
+                  <div key={idx} className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+                    isCorrect ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/5 bg-white/[0.02] text-white/60"
+                  }`}>
                     <span className="font-mono text-[10px] opacity-60">{String.fromCharCode(65 + idx)}.</span>
                     <span className="flex-1">{opt}</span>
-                    {isCorrect && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Correct</span>
-                    )}
+                    {isCorrect && <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Correct</span>}
                   </div>
                 );
               })}
@@ -747,28 +845,13 @@ function QuestionCard({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
-          <button
-            onClick={onEdit}
-            disabled={locked}
-            className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
-            title="Edit"
-          >
+          <button onClick={onEdit} disabled={locked} className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-40" title="Edit">
             <Icon d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" size={14} />
           </button>
-          <button
-            onClick={onDuplicate}
-            disabled={locked}
-            className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
-            title="Duplicate"
-          >
+          <button onClick={onDuplicate} disabled={locked} className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-40" title="Duplicate">
             <Icon d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" size={14} />
           </button>
-          <button
-            onClick={onDelete}
-            disabled={locked}
-            className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-40"
-            title="Delete"
-          >
+          <button onClick={onDelete} disabled={locked} className="rounded-md border border-white/10 bg-white/5 p-1.5 text-white/60 transition hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-40" title="Delete">
             <Icon d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" size={14} />
           </button>
         </div>
@@ -791,7 +874,6 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
 
   const [form, setForm] = useState({
     durationMinutes: exam.durationMinutes,
-    passingMarks: exam.passingMarks,
     startTime: toLocalInput(exam.startTime),
     endTime: toLocalInput(exam.endTime),
     shuffleQuestions: exam.shuffleQuestions,
@@ -802,48 +884,33 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const payload: Partial<Exam> = {
+    await onSave({
       durationMinutes: form.durationMinutes,
-      passingMarks: form.passingMarks,
       shuffleQuestions: form.shuffleQuestions,
       allowBacktrack: form.allowBacktrack,
       startTime: form.startTime ? new Date(form.startTime).toISOString() : undefined,
       endTime: form.endTime ? new Date(form.endTime).toISOString() : undefined,
-    };
-    await onSave(payload);
+    });
     setSaving(false);
   }
 
   return (
     <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <GlowCard title="Timing & Scheduling" description="When and for how long the exam runs.">
+      <GlowCard title="Timing & Scheduling" description="When and for how long the exam runs. You can change these at any time.">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (minutes)</label>
-              <input
-                type="number"
-                min={1}
-                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                value={form.durationMinutes}
-                onChange={(e) => setForm({ ...form, durationMinutes: parseInt(e.target.value) || 0 })}
-                required
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Passing marks</label>
-              <input
-                type="number"
-                min={0}
-                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                value={form.passingMarks}
-                onChange={(e) => setForm({ ...form, passingMarks: parseInt(e.target.value) || 0 })}
-                required
-              />
-            </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (minutes)</label>
+            <input
+              type="number"
+              min={1}
+              className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+              value={form.durationMinutes}
+              onChange={(e) => setForm({ ...form, durationMinutes: parseInt(e.target.value) || 0 })}
+              required
+            />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Available from</label>
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Opens at (available from)</label>
             <input
               type="datetime-local"
               className="auth-input h-11 w-full rounded-lg px-3 text-sm"
@@ -852,7 +919,7 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Available until</label>
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Closes at (available until)</label>
             <input
               type="datetime-local"
               className="auth-input h-11 w-full rounded-lg px-3 text-sm"
@@ -863,17 +930,17 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
         </div>
       </GlowCard>
 
-      <GlowCard title="Quiz Behavior" description="Control how students experience the exam.">
+      <GlowCard title="Quiz Behaviour" description="Control how students experience the exam.">
         <div className="space-y-3">
           <ToggleRow
             label="Shuffle questions"
-            description="Randomize question order for each student to reduce cheating."
+            description="Randomize question order for each student."
             value={form.shuffleQuestions}
             onChange={(v) => setForm({ ...form, shuffleQuestions: v })}
           />
           <ToggleRow
             label="Allow backtracking"
-            description="Students can navigate to previous questions to review or change answers."
+            description="Students can navigate back to previous questions."
             value={form.allowBacktrack}
             onChange={(v) => setForm({ ...form, allowBacktrack: v })}
           />
@@ -888,16 +955,8 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
   );
 }
 
-function ToggleRow({
-  label,
-  description,
-  value,
-  onChange,
-}: {
-  label: string;
-  description: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
+function ToggleRow({ label, description, value, onChange }: {
+  label: string; description: string; value: boolean; onChange: (v: boolean) => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
@@ -912,11 +971,7 @@ function ToggleRow({
           value ? "bg-gradient-to-r from-indigo-500 to-purple-500" : "bg-white/10"
         }`}
       >
-        <span
-          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-            value ? "translate-x-5" : "translate-x-0.5"
-          }`}
-        />
+        <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${value ? "translate-x-5" : "translate-x-0.5"}`} />
       </button>
     </div>
   );
@@ -926,18 +981,67 @@ function ToggleRow({
 /* Preview Tab                                                  */
 /* ============================================================ */
 
+function renderInstructions(raw: string) {
+  const lines = raw.split("\n").filter((l) => l.trim());
+  const isNumbered = (l: string) => /^\d+[.)]\s/.test(l.trim());
+  const isBullet = (l: string) => /^[•\-\*]\s/.test(l.trim());
+
+  return lines.map((line, i) => {
+    const text = line.replace(/^(\d+[.)]\s|[•\-\*]\s)/, "").trim();
+    if (isNumbered(line)) {
+      const num = line.trim().match(/^(\d+)/)?.[1];
+      return (
+        <div key={i} className="flex gap-2 text-sm text-white/70">
+          <span className="shrink-0 font-semibold text-white/40">{num}.</span>
+          <span>{text}</span>
+        </div>
+      );
+    }
+    if (isBullet(line)) {
+      return (
+        <div key={i} className="flex gap-2 text-sm text-white/70">
+          <span className="shrink-0 text-indigo-400">•</span>
+          <span>{text}</span>
+        </div>
+      );
+    }
+    return <p key={i} className="text-sm text-white/70">{line}</p>;
+  });
+}
+
 function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) {
+  const examTypeLabel = exam.examType === "OTHER" && exam.examTypeOther
+    ? exam.examTypeOther
+    : (exam.examType === "END_OF_SEMESTER" ? "End of Semester" : (exam.examType || "Quiz").charAt(0).toUpperCase() + (exam.examType || "quiz").slice(1).toLowerCase());
+
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/5 p-4 text-xs text-indigo-200">
-        Student preview — this is what students will see when taking the exam. Answers and feedback are not collected here.
+        Student preview — this is what students see when taking the exam. Answers are not collected here.
       </div>
 
       <GlowCard>
         <div className="mb-5 border-b border-white/5 pb-4">
-          <p className="font-mono text-xs text-indigo-300">{exam.courseCode} · {exam.courseName}</p>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-mono text-indigo-300">{exam.courseCode} · {exam.courseName}</span>
+            <span className="rounded-full border border-white/10 px-2 py-0.5 text-white/40">{examTypeLabel}</span>
+          </div>
           <h2 className="mt-1 text-xl font-bold text-white">{exam.title}</h2>
           {exam.description && <p className="mt-2 text-sm text-white/60">{exam.description}</p>}
+
+          {exam.instructions && (
+            <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] p-4">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">Instructions</p>
+              <div className="space-y-1.5">{renderInstructions(exam.instructions)}</div>
+            </div>
+          )}
+
+          {exam.examPassword && (
+            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              This exam requires a password to begin.
+            </div>
+          )}
+
           <p className="mt-3 text-xs text-white/40">
             {exam.durationMinutes} minutes · {questions.length} questions · {exam.totalMarks} points
           </p>
@@ -947,44 +1051,59 @@ function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) 
           <p className="py-12 text-center text-sm text-white/40">No questions to preview yet.</p>
         ) : (
           <div className="space-y-6">
-            {questions.map((q, i) => (
-              <div key={q.id} className="border-b border-white/5 pb-6 last:border-0 last:pb-0">
-                <div className="mb-2 flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">Question {i + 1}</span>
-                  <span className="text-white/40">{q.marks} pt{q.marks !== 1 ? "s" : ""}</span>
+            {questions.map((q, i) => {
+              const fibType = (q as any).fillInBlankType;
+              return (
+                <div key={q.id} className="border-b border-white/5 pb-6 last:border-0 last:pb-0">
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-bold text-white">Question {i + 1}</span>
+                    <span className="text-white/40">{q.marks} pt{q.marks !== 1 ? "s" : ""}</span>
+                  </div>
+                  <p className="mb-3 text-sm text-white">{q.text}</p>
+
+                  {q.type === "MCQ" && Array.isArray(q.options) && (
+                    <div className="space-y-2">
+                      {(q.options as string[]).map((opt, idx) => (
+                        <label key={idx} className="flex cursor-not-allowed items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
+                          <input type="radio" disabled className="accent-indigo-500" />
+                          <span>{opt}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === "TRUE_FALSE" && (
+                    <div className="flex gap-2">
+                      {["True", "False"].map((v) => (
+                        <label key={v} className="flex flex-1 cursor-not-allowed items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
+                          <input type="radio" disabled className="accent-indigo-500" />
+                          <span>{v}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === "FILL_IN_BLANK" && (
+                    fibType === "dropdown" && Array.isArray(q.options) ? (
+                      <select disabled className="auth-input h-11 w-full rounded-lg px-3 text-sm opacity-60">
+                        <option value="">Select an answer…</option>
+                        {(q.options as string[]).map((opt, idx) => (
+                          <option key={idx} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input disabled placeholder="Your answer..." className="auth-input h-11 w-full rounded-lg px-3 text-sm" />
+                    )
+                  )}
+                  {q.type === "MULTI_BLANK_EQUATION" && (
+                    <div className="space-y-2">
+                      <pre className="rounded-lg bg-white/[0.02] p-3 text-xs text-white/70">{q.text}</pre>
+                      <p className="text-xs text-white/40">
+                        Student fills in {Array.isArray(q.correctAnswer) ? (q.correctAnswer as string[]).length : 0} blank(s).
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <p className="mb-3 text-sm text-white">{q.text}</p>
-                {q.type === "MCQ" && Array.isArray(q.options) && (
-                  <div className="space-y-2">
-                    {(q.options as string[]).map((opt, idx) => (
-                      <label key={idx} className="flex cursor-not-allowed items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
-                        <input type="radio" disabled className="accent-indigo-500" />
-                        <span>{opt}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-                {q.type === "TRUE_FALSE" && (
-                  <div className="flex gap-2">
-                    {["True", "False"].map((v) => (
-                      <label key={v} className="flex flex-1 cursor-not-allowed items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
-                        <input type="radio" disabled className="accent-indigo-500" />
-                        <span>{v}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-                {q.type === "FILL_IN_BLANK" && (
-                  <input disabled placeholder="Your answer..." className="auth-input h-11 w-full rounded-lg px-3 text-sm" />
-                )}
-                {q.type === "MULTI_BLANK_EQUATION" && (
-                  <div className="space-y-2">
-                    <pre className="rounded-lg bg-white/[0.02] p-3 text-xs text-white/70">{q.text}</pre>
-                    <p className="text-xs text-white/40">Student would fill in {Array.isArray(q.correctAnswer) ? (q.correctAnswer as string[]).length : 0} blank(s).</p>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </GlowCard>
