@@ -12,7 +12,7 @@ import {
   QTYPE_TONE,
   QTYPE_ICON,
 } from "@/components/exams/QuestionEditor";
-import type { Exam, ExamType, Question, QuestionType } from "@/types";
+import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark } from "@/types";
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-white/10 text-white/70 border-white/15",
@@ -50,7 +50,7 @@ export default function ExamEditorPage() {
   const router = useRouter();
   const examId = String(params?.examId || "");
 
-  const { updateExam, publishExam, deleteExam } = useExamStore();
+  const { updateExam, publishExam, deleteExam, setExamActive } = useExamStore();
 
   const [exam, setExam] = useState<Exam | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -106,6 +106,17 @@ export default function ExamEditorPage() {
       await loadExam();
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Upload failed");
+    }
+  }
+
+  async function handleToggleActive() {
+    if (!exam) return;
+    try {
+      const updated = await setExamActive(exam.id, !exam.isActive);
+      setExam((prev) => prev ? { ...prev, ...updated } : prev);
+      pushToast("success", updated.isActive ? "Exam is now visible to students" : "Exam hidden from students");
+    } catch {
+      pushToast("error", "Failed to update exam visibility");
     }
   }
 
@@ -215,6 +226,28 @@ export default function ExamEditorPage() {
                 <GlowButton variant="gradient" size="sm" onClick={handlePublish}>
                   Upload Exam
                 </GlowButton>
+              )}
+              {exam.status !== "DRAFT" && (
+                <button
+                  onClick={handleToggleActive}
+                  className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition ${
+                    exam.isActive
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
+                      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                  }`}
+                >
+                  {exam.isActive ? (
+                    <>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" strokeLinecap="round"/></svg>
+                      Deactivate
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Activate
+                    </>
+                  )}
+                </button>
               )}
               <button
                 onClick={handleDelete}
@@ -864,6 +897,20 @@ function QuestionCard({
 /* Settings Tab                                                 */
 /* ============================================================ */
 
+const DEFAULT_GRADING: GradeRange[] = [
+  { grade: "A", min: 80, max: 100 },
+  { grade: "B", min: 70, max: 79 },
+  { grade: "C", min: 60, max: 69 },
+  { grade: "D", min: 50, max: 59 },
+  { grade: "F", min: 0, max: 49 },
+];
+
+const DEFAULT_REMARKS: ScoreRemark[] = [
+  { min: 80, max: 100, remark: "Excellent performance!" },
+  { min: 60, max: 79, remark: "Good work, keep it up." },
+  { min: 0, max: 59, remark: "Needs improvement." },
+];
+
 function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>) => Promise<void> }) {
   const toLocalInput = (iso?: string) => {
     if (!iso) return "";
@@ -878,6 +925,11 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
     endTime: toLocalInput(exam.endTime),
     shuffleQuestions: exam.shuffleQuestions,
     allowBacktrack: exam.allowBacktrack,
+    maxAttempts: exam.maxAttempts ?? 1,
+    showScoreToStudents: exam.showScoreToStudents !== false,
+    showRemarksToStudents: exam.showRemarksToStudents ?? false,
+    gradingSystem: (exam.gradingSystem as GradeRange[] | undefined) ?? DEFAULT_GRADING,
+    scoreRemarks: (exam.scoreRemarks as ScoreRemark[] | undefined) ?? DEFAULT_REMARKS,
   });
   const [saving, setSaving] = useState(false);
 
@@ -890,75 +942,256 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
       allowBacktrack: form.allowBacktrack,
       startTime: form.startTime ? new Date(form.startTime).toISOString() : undefined,
       endTime: form.endTime ? new Date(form.endTime).toISOString() : undefined,
+      maxAttempts: form.maxAttempts,
+      showScoreToStudents: form.showScoreToStudents,
+      showRemarksToStudents: form.showRemarksToStudents,
+      gradingSystem: form.gradingSystem,
+      scoreRemarks: form.showRemarksToStudents ? form.scoreRemarks : undefined,
     });
     setSaving(false);
   }
 
+  function updateGradeRow(i: number, field: keyof GradeRange, value: string | number) {
+    const updated = form.gradingSystem.map((row, idx) =>
+      idx === i ? { ...row, [field]: field === "grade" ? value : Number(value) } : row
+    );
+    setForm({ ...form, gradingSystem: updated });
+  }
+
+  function addGradeRow() {
+    setForm({ ...form, gradingSystem: [...form.gradingSystem, { grade: "", min: 0, max: 0 }] });
+  }
+
+  function removeGradeRow(i: number) {
+    setForm({ ...form, gradingSystem: form.gradingSystem.filter((_, idx) => idx !== i) });
+  }
+
+  function updateRemarkRow(i: number, field: keyof ScoreRemark, value: string | number) {
+    const updated = form.scoreRemarks.map((row, idx) =>
+      idx === i ? { ...row, [field]: field === "remark" ? value : Number(value) } : row
+    );
+    setForm({ ...form, scoreRemarks: updated });
+  }
+
+  function addRemarkRow() {
+    setForm({ ...form, scoreRemarks: [...form.scoreRemarks, { min: 0, max: 0, remark: "" }] });
+  }
+
+  function removeRemarkRow(i: number) {
+    setForm({ ...form, scoreRemarks: form.scoreRemarks.filter((_, idx) => idx !== i) });
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <GlowCard title="Timing & Scheduling" description="When and for how long the exam runs. You can change these at any time.">
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (minutes)</label>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-              value={form.durationMinutes || ""}
-              onKeyDown={(e) => {
-                if (e.key === "0" && !(e.target as HTMLInputElement).value) e.preventDefault();
-              }}
-              onChange={(e) => {
-                const stripped = e.target.value.replace(/^0+(\d)/, "$1").replace(/[^0-9]/g, "");
-                setForm({ ...form, durationMinutes: parseInt(stripped, 10) || 0 });
-              }}
-              placeholder="e.g. 60"
-              required
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Timing */}
+        <GlowCard title="Timing & Scheduling" description="When and for how long the exam runs.">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (minutes)</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                  value={form.durationMinutes || ""}
+                  onKeyDown={(e) => {
+                    if (e.key === "0" && !(e.target as HTMLInputElement).value) e.preventDefault();
+                  }}
+                  onChange={(e) => {
+                    const stripped = e.target.value.replace(/^0+(\d)/, "$1").replace(/[^0-9]/g, "");
+                    setForm({ ...form, durationMinutes: parseInt(stripped, 10) || 0 });
+                  }}
+                  placeholder="e.g. 60"
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Max attempts</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                  value={form.maxAttempts}
+                  onChange={(e) => setForm({ ...form, maxAttempts: parseInt(e.target.value, 10) || 1 })}
+                />
+                <p className="text-[10px] text-white/30">How many times can each student attempt</p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Opens at (available from)</label>
+              <input
+                type="datetime-local"
+                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                value={form.startTime}
+                onChange={(e) => setForm({ ...form, startTime: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Closes at (available until)</label>
+              <input
+                type="datetime-local"
+                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                value={form.endTime}
+                onChange={(e) => setForm({ ...form, endTime: e.target.value })}
+              />
+            </div>
+          </div>
+        </GlowCard>
+
+        {/* Behaviour */}
+        <GlowCard title="Quiz Behaviour" description="Control how students experience the exam.">
+          <div className="space-y-3">
+            <ToggleRow
+              label="Shuffle questions"
+              description="Randomize question order for each student."
+              value={form.shuffleQuestions}
+              onChange={(v) => setForm({ ...form, shuffleQuestions: v })}
+            />
+            <ToggleRow
+              label="Allow backtracking"
+              description="Students can navigate back to previous questions."
+              value={form.allowBacktrack}
+              onChange={(v) => setForm({ ...form, allowBacktrack: v })}
             />
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Opens at (available from)</label>
-            <input
-              type="datetime-local"
-              className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-              value={form.startTime}
-              onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-            />
+        </GlowCard>
+      </div>
+
+      {/* Results visibility */}
+      <GlowCard title="Results & Feedback" description="Choose what students see after submitting.">
+        <div className="space-y-3">
+          <ToggleRow
+            label="Show score to students"
+            description="Students can see their final score after submission."
+            value={form.showScoreToStudents}
+            onChange={(v) => setForm({ ...form, showScoreToStudents: v })}
+          />
+          <ToggleRow
+            label="Show remarks to students"
+            description="Students see a custom remark based on their score range."
+            value={form.showRemarksToStudents}
+            onChange={(v) => setForm({ ...form, showRemarksToStudents: v })}
+          />
+        </div>
+
+        {form.showRemarksToStudents && (
+          <div className="mt-4 space-y-3 rounded-lg border border-white/5 bg-white/[0.02] p-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-white/50">Score Remarks</p>
+            <p className="text-xs text-white/30">Define a remark for each score range. Students see the remark for their score.</p>
+            <div className="space-y-2">
+              {form.scoreRemarks.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    className="auth-input h-9 w-16 rounded-md px-2 text-xs"
+                    placeholder="Min"
+                    value={row.min}
+                    onChange={(e) => updateRemarkRow(i, "min", e.target.value)}
+                  />
+                  <span className="text-white/30 text-xs">–</span>
+                  <input
+                    type="number"
+                    className="auth-input h-9 w-16 rounded-md px-2 text-xs"
+                    placeholder="Max"
+                    value={row.max}
+                    onChange={(e) => updateRemarkRow(i, "max", e.target.value)}
+                  />
+                  <input
+                    className="auth-input h-9 flex-1 rounded-md px-2 text-xs"
+                    placeholder="Remark (e.g. Excellent!)"
+                    value={row.remark}
+                    onChange={(e) => updateRemarkRow(i, "remark", e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeRemarkRow(i)}
+                    className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" /></svg>
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addRemarkRow}
+                className="text-xs text-white/50 hover:text-white"
+              >
+                + Add remark range
+              </button>
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Closes at (available until)</label>
-            <input
-              type="datetime-local"
-              className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-              value={form.endTime}
-              onChange={(e) => setForm({ ...form, endTime: e.target.value })}
-            />
+        )}
+      </GlowCard>
+
+      {/* Grading system */}
+      <GlowCard title="Grading System" description="Set grade boundaries as percentages (0–100). Students' scores are compared to the percentage of total marks.">
+        <div className="space-y-2">
+          <div className="grid grid-cols-[60px_80px_80px_1fr_36px] gap-2 px-1">
+            {["Grade", "Min %", "Max %", "", ""].map((h) => (
+              <span key={h} className="text-[10px] font-semibold uppercase tracking-wider text-white/30">{h}</span>
+            ))}
           </div>
+          {form.gradingSystem.map((row, i) => (
+            <div key={i} className="grid grid-cols-[60px_80px_80px_1fr_36px] items-center gap-2">
+              <input
+                className="auth-input h-9 rounded-md px-2 text-center text-sm font-bold"
+                placeholder="A"
+                value={row.grade}
+                maxLength={4}
+                onChange={(e) => updateGradeRow(i, "grade", e.target.value.toUpperCase())}
+              />
+              <input
+                type="number"
+                min={0}
+                max={100}
+                className="auth-input h-9 rounded-md px-2 text-sm"
+                placeholder="80"
+                value={row.min}
+                onChange={(e) => updateGradeRow(i, "min", e.target.value)}
+              />
+              <input
+                type="number"
+                min={0}
+                max={100}
+                className="auth-input h-9 rounded-md px-2 text-sm"
+                placeholder="100"
+                value={row.max}
+                onChange={(e) => updateGradeRow(i, "max", e.target.value)}
+              />
+              <div
+                className="h-3 rounded-full"
+                style={{
+                  background: `hsl(${120 - (i / Math.max(form.gradingSystem.length - 1, 1)) * 120}, 70%, 55%)`,
+                  opacity: 0.7,
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => removeGradeRow(i)}
+                className="flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addGradeRow}
+            className="mt-1 text-xs text-white/50 hover:text-white"
+          >
+            + Add grade row
+          </button>
         </div>
       </GlowCard>
 
-      <GlowCard title="Quiz Behaviour" description="Control how students experience the exam.">
-        <div className="space-y-3">
-          <ToggleRow
-            label="Shuffle questions"
-            description="Randomize question order for each student."
-            value={form.shuffleQuestions}
-            onChange={(v) => setForm({ ...form, shuffleQuestions: v })}
-          />
-          <ToggleRow
-            label="Allow backtracking"
-            description="Students can navigate back to previous questions."
-            value={form.allowBacktrack}
-            onChange={(v) => setForm({ ...form, allowBacktrack: v })}
-          />
-        </div>
-        <div className="mt-5 flex items-center justify-end gap-2 border-t border-white/5 pt-4">
-          <GlowButton type="submit" size="sm" disabled={saving}>
-            {saving ? "Saving..." : "Save settings"}
-          </GlowButton>
-        </div>
-      </GlowCard>
+      <div className="flex justify-end">
+        <GlowButton type="submit" disabled={saving}>
+          {saving ? "Saving..." : "Save all settings"}
+        </GlowButton>
+      </div>
     </form>
   );
 }

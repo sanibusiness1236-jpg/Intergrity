@@ -9,6 +9,7 @@ export interface User {
   studentId?: string;
   program?: string;
   gender?: string;
+  avatarUrl?: string;
   institutionId?: string;
 }
 
@@ -22,6 +23,18 @@ export interface Institution {
 export type ExamStatus = "DRAFT" | "PUBLISHED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 export type QuestionType = "MCQ" | "TRUE_FALSE" | "FILL_IN_BLANK" | "MULTI_BLANK_EQUATION";
 export type ExamType = "QUIZ" | "MIDSEMESTER" | "ASSIGNMENT" | "END_OF_SEMESTER" | "OTHER";
+
+export interface GradeRange {
+  grade: string;
+  min: number;
+  max: number;
+}
+
+export interface ScoreRemark {
+  min: number;
+  max: number;
+  remark: string;
+}
 
 export interface Exam {
   id: string;
@@ -40,6 +53,12 @@ export interface Exam {
   totalMarks: number;
   shuffleQuestions: boolean;
   allowBacktrack: boolean;
+  isActive: boolean;
+  maxAttempts: number;
+  showScoreToStudents: boolean;
+  showRemarksToStudents: boolean;
+  gradingSystem?: GradeRange[];
+  scoreRemarks?: ScoreRemark[];
   createdById: string;
   institutionId: string;
   questions?: Question[];

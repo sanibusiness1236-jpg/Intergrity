@@ -87,6 +87,7 @@ model User {
   studentId      String?   @unique
   program        String?
   gender         String?
+  avatarUrl      String?
   isActive       Boolean   @default(true)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -115,9 +116,15 @@ model Exam {
   startTime        DateTime?
   endTime          DateTime?
   totalMarks       Float      @default(0)
-  shuffleQuestions Boolean    @default(false)
-  allowBacktrack   Boolean    @default(true)
-  createdById      String
+  shuffleQuestions      Boolean  @default(false)
+  allowBacktrack        Boolean  @default(true)
+  isActive              Boolean  @default(true)
+  maxAttempts           Int      @default(1)
+  showScoreToStudents   Boolean  @default(true)
+  showRemarksToStudents Boolean  @default(false)
+  gradingSystem         Json?
+  scoreRemarks          Json?
+  createdById           String
   createdBy        User       @relation("ExamCreator", fields: [createdById], references: [id])
   institutionId    String
   institution      Institution @relation(fields: [institutionId], references: [id])

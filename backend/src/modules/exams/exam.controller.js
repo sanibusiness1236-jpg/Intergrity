@@ -29,6 +29,8 @@ async function createExam(req, res, next) {
       examType, examTypeOther, examPassword,
       durationMinutes, startTime, endTime, totalMarks,
       shuffleQuestions, allowBacktrack, institutionId,
+      maxAttempts, showScoreToStudents, showRemarksToStudents,
+      gradingSystem, scoreRemarks,
     } = req.body;
 
     const resolvedInstId = await resolveInstitutionId(req.user.id, institutionId);
@@ -49,6 +51,12 @@ async function createExam(req, res, next) {
         totalMarks: totalMarks || 0,
         shuffleQuestions: shuffleQuestions || false,
         allowBacktrack: allowBacktrack !== false,
+        maxAttempts: maxAttempts ? parseInt(maxAttempts, 10) : 1,
+        showScoreToStudents: showScoreToStudents !== false,
+        showRemarksToStudents: showRemarksToStudents || false,
+        gradingSystem: gradingSystem || null,
+        scoreRemarks: scoreRemarks || null,
+        isActive: true,
         createdById: req.user.id,
         institutionId: resolvedInstId,
       },
@@ -68,6 +76,7 @@ async function getExams(req, res, next) {
     }
     if (req.user.role === "STUDENT") {
       where.status = { in: ["PUBLISHED", "ACTIVE"] };
+      where.isActive = true;
     }
     if (req.query.institutionId) {
       where.institutionId = req.query.institutionId;
@@ -159,6 +168,8 @@ async function updateExam(req, res, next) {
       examType, examTypeOther, examPassword,
       durationMinutes, startTime, endTime,
       shuffleQuestions, allowBacktrack,
+      isActive, maxAttempts, showScoreToStudents, showRemarksToStudents,
+      gradingSystem, scoreRemarks,
     } = req.body;
 
     const data = {};
@@ -177,6 +188,12 @@ async function updateExam(req, res, next) {
     if (endTime !== undefined) data.endTime = endTime ? new Date(endTime) : null;
     if (shuffleQuestions !== undefined) data.shuffleQuestions = shuffleQuestions;
     if (allowBacktrack !== undefined) data.allowBacktrack = allowBacktrack;
+    if (isActive !== undefined) data.isActive = isActive;
+    if (maxAttempts !== undefined) data.maxAttempts = parseInt(maxAttempts, 10);
+    if (showScoreToStudents !== undefined) data.showScoreToStudents = showScoreToStudents;
+    if (showRemarksToStudents !== undefined) data.showRemarksToStudents = showRemarksToStudents;
+    if (gradingSystem !== undefined) data.gradingSystem = gradingSystem;
+    if (scoreRemarks !== undefined) data.scoreRemarks = scoreRemarks;
 
     const updated = await prisma.exam.update({
       where: { id: req.params.id },

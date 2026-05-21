@@ -13,6 +13,7 @@ interface ExamState {
   updateExam: (id: string, data: Partial<Exam>) => Promise<Exam>;
   deleteExam: (id: string) => Promise<void>;
   publishExam: (id: string) => Promise<void>;
+  setExamActive: (id: string, isActive: boolean) => Promise<Exam>;
   addQuestion: (examId: string, question: Partial<Question>) => Promise<Question>;
   updateQuestion: (questionId: string, data: Partial<Question>) => Promise<Question>;
   deleteQuestion: (questionId: string) => Promise<void>;
@@ -67,6 +68,14 @@ export const useExamStore = create<ExamState>((set) => ({
   publishExam: async (id) => {
     const { data } = await api.patch(`/exams/${id}/publish`);
     set((s) => ({ exams: s.exams.map((e) => (e.id === id ? data.data : e)) }));
+  },
+
+  setExamActive: async (id, isActive) => {
+    const { data } = await api.put(`/exams/${id}`, { isActive });
+    set((s) => ({
+      exams: s.exams.map((e) => (e.id === id ? { ...e, ...data.data } : e)),
+    }));
+    return data.data;
   },
 
   addQuestion: async (examId, question) => {

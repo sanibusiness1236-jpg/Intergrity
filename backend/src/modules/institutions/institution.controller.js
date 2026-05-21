@@ -100,6 +100,14 @@ async function updateInstitution(req, res, next) {
   }
 }
 
+async function ensureBucket(supabase, bucketName) {
+  const { data: buckets } = await supabase.storage.listBuckets();
+  const exists = (buckets || []).some((b) => b.name === bucketName);
+  if (!exists) {
+    await supabase.storage.createBucket(bucketName, { public: true, fileSizeLimit: 5242880 });
+  }
+}
+
 async function uploadLogo(req, res, next) {
   try {
     if (!req.file) throw new AppError("No file uploaded", 400);
@@ -108,6 +116,7 @@ async function uploadLogo(req, res, next) {
     const objectPath = `${req.params.id}/${Date.now()}.${ext}`;
 
     const supabase = getSupabaseClient();
+    await ensureBucket(supabase, logoBucket);
     const { error: uploadError } = await supabase.storage
       .from(logoBucket)
       .upload(objectPath, req.file.buffer, {

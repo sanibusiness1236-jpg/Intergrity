@@ -16,6 +16,7 @@ const invigilatorRoutes = require("./modules/invigilator/invigilator.routes");
 const integrityRoutes = require("./modules/integrity/integrity.routes");
 const analyticsRoutes = require("./modules/analytics/analytics.routes");
 const studentRoutes = require("./modules/students/student.routes");
+const userRoutes = require("./modules/users/user.routes");
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use("/api/invigilator", invigilatorRoutes);
 app.use("/api/integrity", integrityRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/students", studentRoutes);
+app.use("/api/users", userRoutes);
 
 app.use(errorHandler);
 

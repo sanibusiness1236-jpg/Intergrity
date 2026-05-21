@@ -63,7 +63,7 @@ export function formToPayload(form: QuestionFormValue): {
   error: string | null;
 } {
   if (!form.text.trim()) return { payload: null, error: "Question text is required" };
-  if (form.marks <= 0) return { payload: null, error: "Marks must be greater than 0" };
+  if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
 
   if (form.type === "MCQ") {
     const opts = form.options.map((o) => o.trim()).filter(Boolean);
@@ -217,14 +217,13 @@ export function QuestionEditor({
           <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Points</label>
           <input
             type="number"
-            min={0.25}
-            step={0.25}
+            step="any"
             className="auth-input h-11 w-full rounded-lg px-3 text-sm"
             value={form.marks}
-            onChange={(e) => setForm({ ...form, marks: parseFloat(e.target.value) || 0.25 })}
+            onChange={(e) => setForm({ ...form, marks: parseFloat(e.target.value) || 0 })}
             required
           />
-          <p className="text-[10px] text-white/30">Decimals allowed (e.g. 0.5, 1.5)</p>
+          <p className="text-[10px] text-white/30">Any value allowed (e.g. 0, 0.5, 5, 10)</p>
         </div>
       </div>
 

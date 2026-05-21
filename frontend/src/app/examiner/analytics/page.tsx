@@ -279,7 +279,11 @@ export default function AnalyticsPage() {
 
           {grades && (
             <div className="mb-8">
-              <GradeBreakdownChart grades={grades.grades} total={grades.totalStudents} />
+              <GradeBreakdownChart
+                grades={grades.grades}
+                total={grades.totalStudents}
+                scoreDistribution={stats?.scoreDistribution}
+              />
             </div>
           )}
 
