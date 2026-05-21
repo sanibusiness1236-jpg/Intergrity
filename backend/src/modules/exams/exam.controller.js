@@ -66,10 +66,13 @@ async function getExams(req, res, next) {
     if (req.user.role === "EXAMINER") {
       where.createdById = req.user.id;
     }
+    if (req.user.role === "STUDENT") {
+      where.status = { in: ["PUBLISHED", "ACTIVE"] };
+    }
     if (req.query.institutionId) {
       where.institutionId = req.query.institutionId;
     }
-    if (req.query.status) {
+    if (req.query.status && req.user.role !== "STUDENT") {
       where.status = req.query.status;
     }
 

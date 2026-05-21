@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
@@ -8,10 +8,10 @@ import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/Das
 import { AnnouncementBadge } from "@/components/dashboard/AnnouncementBadge";
 import { GradientHeading } from "@/components/dashboard/GradientHeading";
 import { StatCard } from "@/components/dashboard/StatCard";
-import type { ExamSession } from "@/types";
+import type { Exam, ExamSession } from "@/types";
 
-const Icon = ({ d }: { d: string }) => (
-  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+const Icon = ({ d, size = 18 }: { d: string; size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d={d} />
   </svg>
 );
@@ -23,14 +23,33 @@ const STATUS_TONE: Record<string, string> = {
   NOT_STARTED: "bg-white/10 text-white/60 border-white/15",
 };
 
+function isAvailableNow(exam: Pick<Exam, "status" | "startTime" | "endTime">) {
+  const now = Date.now();
+  const start = exam.startTime ? new Date(exam.startTime).getTime() : null;
+  const end = exam.endTime ? new Date(exam.endTime).getTime() : null;
+  if (exam.status === "ACTIVE") return true;
+  if (exam.status === "PUBLISHED") {
+    if (start && start > now) return false;
+    if (end && end < now) return false;
+    return true;
+  }
+  return false;
+}
+
 export default function StudentDashboard() {
   const { user } = useAuthStore();
   const [sessions, setSessions] = useState<(ExamSession & { exam: any })[]>([]);
+  const [availableExams, setAvailableExams] = useState<Exam[]>([]);
 
   useEffect(() => {
     if (!user) return;
     api.get(`/students/${user.id}/exams`).then(({ data }) => {
       setSessions(data.data || []);
+    }).catch(() => {});
+
+    api.get("/exams").then(({ data }) => {
+      const all: Exam[] = data.data || [];
+      setAvailableExams(all.filter(isAvailableNow));
     }).catch(() => {});
   }, [user]);
 
@@ -44,19 +63,32 @@ export default function StudentDashboard() {
     return Math.round(avg);
   })();
 
+  const startedExamIds = useMemo(() => new Set(sessions.map((s) => s.examId)), [sessions]);
+
+  const newlyAvailable = useMemo(
+    () => availableExams.filter((e) => !startedExamIds.has(e.id)),
+    [availableExams, startedExamIds]
+  );
+
   return (
     <DashboardShell>
       <header className="mb-10 space-y-5">
         <AnnouncementBadge
-          tag={inProgress > 0 ? "Live" : "Tip"}
-          message={inProgress > 0 ? `You have ${inProgress} exam${inProgress > 1 ? "s" : ""} in progress` : "Pro tip: Don't switch tabs during exams"}
-          tone={inProgress > 0 ? "warning" : "default"}
+          tag={inProgress > 0 ? "Live" : newlyAvailable.length > 0 ? "New" : "Tip"}
+          message={
+            inProgress > 0
+              ? `You have ${inProgress} exam${inProgress > 1 ? "s" : ""} in progress`
+              : newlyAvailable.length > 0
+              ? `${newlyAvailable.length} exam${newlyAvailable.length > 1 ? "s are" : " is"} available for you to start`
+              : "Pro tip: Don't switch tabs during exams"
+          }
+          tone={inProgress > 0 || newlyAvailable.length > 0 ? "warning" : "default"}
         />
 
         <GradientHeading
           highlight="Hi,"
           title={`${user?.firstName || "Student"}.`}
-          subtitle="Stay focused, stay honest. Your exams, schedules, and scores in one place — protected by real-time AI integrity monitoring."
+          subtitle="Stay focused, stay honest. Your exams, schedules, and scores — protected by real-time AI integrity monitoring."
         />
 
         <div className="flex flex-wrap gap-3 pt-2">
@@ -69,12 +101,20 @@ export default function StudentDashboard() {
                 </svg>
               </GlowButton>
             </Link>
+          ) : newlyAvailable.length > 0 ? (
+            <Link href="/student/exam">
+              <GlowButton variant="gradient" size="lg">
+                View Available Exams →
+              </GlowButton>
+            </Link>
           ) : (
             <GlowButton variant="gradient" size="lg" disabled>
               No active exam
             </GlowButton>
           )}
-          <GlowButton variant="ghost" size="lg">View History</GlowButton>
+          <Link href="/student/exam">
+            <GlowButton variant="ghost" size="lg">My Exams</GlowButton>
+          </Link>
         </div>
       </header>
 
@@ -91,49 +131,76 @@ export default function StudentDashboard() {
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <GlowCard
-          className="lg:col-span-2"
-          title="Your Exams"
-          description="Recent attempts and upcoming sessions"
-        >
-          {sessions.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-white/10 py-16 text-center text-sm text-white/40">
-              <p className="mb-2 text-base text-white/60">No exams assigned yet</p>
-              <p>Check back later — your examiner will publish your assigned exams here.</p>
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {sessions.map((s) => (
-                <li key={s.id} className="group rounded-lg border border-white/5 bg-white/[0.02] p-4 transition hover:border-white/10 hover:bg-white/5">
-                  <div className="flex items-center justify-between gap-3">
+        <div className="space-y-6 lg:col-span-2">
+          {/* Available exams to start */}
+          {newlyAvailable.length > 0 && (
+            <GlowCard title="Available Now" description="These exams are open — click Start to begin.">
+              <ul className="space-y-2">
+                {newlyAvailable.map((exam) => (
+                  <li key={exam.id} className="flex items-center gap-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/30 hover:bg-emerald-500/10">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10">
+                      <Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" size={16} />
+                    </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-white">{s.exam?.title || "Exam"}</p>
-                      <p className="text-xs text-white/40">{s.exam?.courseCode}</p>
+                      <p className="truncate text-sm font-semibold text-white">{exam.title}</p>
+                      <p className="text-xs text-white/40">{exam.courseCode} · {exam.durationMinutes} min · {exam.totalMarks} pts</p>
                     </div>
-                    <div className="flex shrink-0 items-center gap-3">
-                      {s.score !== null && s.score !== undefined && s.maxScore && (
-                        <div className="text-right">
-                          <p className="text-xs text-white/40">Score</p>
-                          <p className="text-sm font-semibold text-white">
-                            {s.score}<span className="text-white/40">/{s.maxScore}</span>
-                          </p>
-                        </div>
-                      )}
-                      <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${STATUS_TONE[s.status] || STATUS_TONE.NOT_STARTED}`}>
-                        {s.status.replace(/_/g, " ")}
-                      </span>
-                      {s.status === "IN_PROGRESS" && (
-                        <Link href={`/student/exam/${s.examId}`}>
-                          <GlowButton variant="gradient" size="sm">Continue</GlowButton>
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                    <Link href={`/student/exam/${exam.id}`} className="shrink-0">
+                      <GlowButton variant="gradient" size="sm">Start →</GlowButton>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </GlowCard>
           )}
-        </GlowCard>
+
+          {/* Past sessions */}
+          <GlowCard
+            title="Your Exams"
+            description="Recent attempts and in-progress sessions"
+          >
+            {sessions.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-white/10 py-12 text-center text-sm text-white/40">
+                <p className="mb-2 text-base text-white/60">No started exams yet</p>
+                <p className="mb-4">Available exams will appear above once your examiner publishes them.</p>
+                <Link href="/student/exam" className="text-xs text-indigo-300 hover:text-indigo-200 underline">
+                  Browse all exams →
+                </Link>
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {sessions.map((s) => (
+                  <li key={s.id} className="group rounded-lg border border-white/5 bg-white/[0.02] p-4 transition hover:border-white/10 hover:bg-white/5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-white">{s.exam?.title || "Exam"}</p>
+                        <p className="text-xs text-white/40">{s.exam?.courseCode}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3">
+                        {s.score !== null && s.score !== undefined && s.maxScore && (
+                          <div className="text-right">
+                            <p className="text-xs text-white/40">Score</p>
+                            <p className="text-sm font-semibold text-white">
+                              {s.score}<span className="text-white/40">/{s.maxScore}</span>
+                            </p>
+                          </div>
+                        )}
+                        <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${STATUS_TONE[s.status] || STATUS_TONE.NOT_STARTED}`}>
+                          {s.status.replace(/_/g, " ")}
+                        </span>
+                        {s.status === "IN_PROGRESS" && (
+                          <Link href={`/student/exam/${s.examId}`}>
+                            <GlowButton variant="gradient" size="sm">Continue</GlowButton>
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </GlowCard>
+        </div>
 
         <GlowCard title="Exam Integrity" description="What we monitor for you">
           <ul className="space-y-3 text-sm">

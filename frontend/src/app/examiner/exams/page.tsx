@@ -52,8 +52,6 @@ const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
 interface FormState {
   title: string;
   courseCode: string;
-  courseName: string;
-  description: string;
   durationMinutes: number;
   examType: ExamType;
   examTypeOther: string;
@@ -64,8 +62,6 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   title: "",
   courseCode: "",
-  courseName: "",
-  description: "",
   durationMinutes: 60,
   examType: "QUIZ",
   examTypeOther: "",
@@ -151,9 +147,10 @@ export default function ExamsListPage() {
     try {
       const created = await createExam({
         ...form,
+        courseName: form.title,
         examTypeOther: form.examType === "OTHER" ? form.examTypeOther : undefined,
         totalMarks: 0,
-        startTime: new Date(Date.now() + 60_000).toISOString(),
+        startTime: new Date().toISOString(),
         endTime: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       });
       pushToast("success", "Exam created");
@@ -348,7 +345,7 @@ export default function ExamsListPage() {
             >
               <form onSubmit={handleCreate} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Title</label>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Title / Course Name</label>
                   <input
                     className="auth-input h-11 w-full rounded-lg px-3 text-sm"
                     value={form.title}
@@ -369,18 +366,6 @@ export default function ExamsListPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Course name</label>
-                    <input
-                      className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                      value={form.courseName}
-                      onChange={(e) => setForm({ ...form, courseName: e.target.value })}
-                      placeholder="Database Systems"
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Exam type</label>
                     <select
                       className="auth-input h-11 w-full rounded-lg px-3 text-sm"
@@ -392,17 +377,25 @@ export default function ExamsListPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (min)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                      value={form.durationMinutes}
-                      onChange={(e) => setForm({ ...form, durationMinutes: parseInt(e.target.value) || 0 })}
-                      required
-                    />
-                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Duration (minutes)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    className="auth-input h-11 w-full rounded-lg px-3 text-sm"
+                    value={form.durationMinutes || ""}
+                    onKeyDown={(e) => {
+                      if (e.key === "0" && !(e.target as HTMLInputElement).value) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      const stripped = e.target.value.replace(/^0+(\d)/, "$1").replace(/[^0-9]/g, "");
+                      setForm({ ...form, durationMinutes: parseInt(stripped, 10) || 0 });
+                    }}
+                    placeholder="e.g. 30"
+                    required
+                  />
                 </div>
                 {form.examType === "OTHER" && (
                   <div className="space-y-1.5">

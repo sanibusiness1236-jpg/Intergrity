@@ -754,7 +754,7 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
               </button>
             </div>
             <QuestionEditor
-              initial={{ type: newQuestionType, marks: 1, text: "", options: ["", "", "", ""] as any }}
+              initial={{ type: newQuestionType, marks: 1, text: "", options: newQuestionType === "MCQ" ? ["", "", "", "", "None of the above"] as any : ["", "", "", ""] as any }}
               onSave={handleCreate}
               onCancel={() => setNewQuestionType(null)}
               saveLabel="Add question"
@@ -903,9 +903,17 @@ function SettingsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam
             <input
               type="number"
               min={1}
+              step={1}
               className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-              value={form.durationMinutes}
-              onChange={(e) => setForm({ ...form, durationMinutes: parseInt(e.target.value) || 0 })}
+              value={form.durationMinutes || ""}
+              onKeyDown={(e) => {
+                if (e.key === "0" && !(e.target as HTMLInputElement).value) e.preventDefault();
+              }}
+              onChange={(e) => {
+                const stripped = e.target.value.replace(/^0+(\d)/, "$1").replace(/[^0-9]/g, "");
+                setForm({ ...form, durationMinutes: parseInt(stripped, 10) || 0 });
+              }}
+              placeholder="e.g. 60"
               required
             />
           </div>
