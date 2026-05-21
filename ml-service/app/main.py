@@ -6,10 +6,11 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.models.registry import model_registry
-from app.routes import health, predict, evaluate, models as models_route
+from app.routes import health, predict, evaluate, models as models_route, datasets
 
 
 settings.trained_models_path.mkdir(parents=True, exist_ok=True)
+settings.imported_datasets_path.mkdir(parents=True, exist_ok=True)
 settings.static_path.mkdir(parents=True, exist_ok=True)
 
 
@@ -40,3 +41,4 @@ app.include_router(health.router, tags=["Health"])
 app.include_router(models_route.router, prefix="/models", tags=["Models"])
 app.include_router(predict.router, tags=["Prediction"])
 app.include_router(evaluate.router, tags=["Evaluation"])
+app.include_router(datasets.router, tags=["Datasets"])

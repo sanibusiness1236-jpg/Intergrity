@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     trained_models_dir: str = "trained_models"
+    imported_datasets_dir: str = "imported_datasets"
     static_dir: str = "static"
 
     num_node_features: int = 9
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
     @property
     def static_path(self) -> Path:
         return Path(self.static_dir)
+
+    @property
+    def imported_datasets_path(self) -> Path:
+        return Path(self.imported_datasets_dir)
 
 
 settings = Settings()

@@ -10,6 +10,12 @@ import { ModelComparisonChart } from "@/components/integrity/ModelComparisonChar
 import { ConfusionMatrixDisplay } from "@/components/integrity/ConfusionMatrixDisplay";
 import type { BenchmarkResult } from "@/types";
 
+const Svg = ({ d }: { d: string }) => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d={d} />
+  </svg>
+);
+
 const Icon = ({ d }: { d: string }) => (
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d={d} />
@@ -30,6 +36,29 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
   graphsage: "Inductive sampling & aggregation",
 };
 
+interface ImportedDataset {
+  id: string;
+  name: string;
+  num_students: number;
+  has_labels: boolean;
+  created_at?: string;
+}
+
+interface DatasetPrediction {
+  dataset_id: string;
+  dataset_name?: string;
+  model_used: string;
+  num_students: number;
+  num_flagged: number;
+  num_clean: number;
+  predictions: Array<{
+    student_id: string;
+    prediction: string;
+    flagged_prob: number;
+    clean_prob: number;
+  }>;
+}
+
 export default function IntegrityDashboard() {
   const [benchmark, setBenchmark] = useState<BenchmarkResult | null>(null);
   const [activeModel, setActiveModel] = useState<string>("");
@@ -38,9 +67,80 @@ export default function IntegrityDashboard() {
   const [cheatRatio, setCheatRatio] = useState(0.2);
   const [error, setError] = useState("");
 
+  const [datasets, setDatasets] = useState<ImportedDataset[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [predicting, setPredicting] = useState(false);
+  const [training, setTraining] = useState(false);
+  const [datasetResult, setDatasetResult] = useState<DatasetPrediction | null>(null);
+  const [datasetMsg, setDatasetMsg] = useState("");
+
   useEffect(() => {
     fetchModels();
+    fetchDatasets();
   }, []);
+
+  async function fetchDatasets() {
+    try {
+      const { data } = await api.get("/integrity/datasets");
+      setDatasets(data.data?.datasets || []);
+    } catch {
+      setDatasets([]);
+    }
+  }
+
+  async function handleImportCsv(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setDatasetMsg("");
+    setDatasetResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("name", file.name.replace(/\.csv$/i, ""));
+      await api.post("/integrity/datasets/import", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setDatasetMsg(`Imported ${file.name} successfully.`);
+      await fetchDatasets();
+    } catch (err: any) {
+      setDatasetMsg(err.response?.data?.error?.message || "Import failed");
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  }
+
+  async function runDatasetPredict() {
+    if (!selectedDatasetId) return;
+    setPredicting(true);
+    setDatasetMsg("");
+    try {
+      const { data } = await api.post(`/integrity/datasets/${selectedDatasetId}/predict`);
+      setDatasetResult(data.data);
+      setDatasetMsg(`Predictions complete — ${data.data.num_flagged} flagged, ${data.data.num_clean} clean.`);
+    } catch (err: any) {
+      setDatasetMsg(err.response?.data?.error?.message || "Prediction failed");
+      setDatasetResult(null);
+    } finally {
+      setPredicting(false);
+    }
+  }
+
+  async function runDatasetTrain() {
+    if (!selectedDatasetId) return;
+    setTraining(true);
+    setDatasetMsg("");
+    try {
+      const { data } = await api.post(`/integrity/datasets/${selectedDatasetId}/train`, { epochs: 100 });
+      setDatasetMsg(data.data?.message || "Training complete.");
+    } catch (err: any) {
+      setDatasetMsg(err.response?.data?.error?.message || "Training failed");
+    } finally {
+      setTraining(false);
+    }
+  }
 
   async function fetchModels() {
     try {
@@ -97,6 +197,75 @@ export default function IntegrityDashboard() {
           subtitle="Compare four GNN architectures on the same synthetic graph. Switch the production model with one click — instant impact across every live exam."
         />
       </header>
+
+      <GlowCard
+        className="mb-8"
+        title="Import Dataset & Predict"
+        description="Upload a CSV with student behavior features — run GNN predictions on that exact dataset"
+      >
+        <p className="mb-4 text-xs text-white/45">
+          Required column: <code className="text-indigo-300">student_id</code>. Optional:{" "}
+          <code className="text-white/60">tab_switch_count</code>, <code className="text-white/60">paste_event_count</code>,{" "}
+          <code className="text-white/60">seat_x</code>, <code className="text-white/60">seat_y</code>,{" "}
+          <code className="text-white/60">label</code> (0/1 for training).
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 text-sm font-medium text-white/80 transition hover:bg-white/10">
+            <Svg d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            {importing ? "Importing…" : "Upload CSV"}
+            <input type="file" accept=".csv" className="hidden" onChange={handleImportCsv} disabled={importing} />
+          </label>
+          <div className="min-w-[220px] flex-1 space-y-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Imported dataset</label>
+            <select
+              className="auth-input flex h-11 w-full rounded-lg px-3 text-sm"
+              value={selectedDatasetId}
+              onChange={(e) => { setSelectedDatasetId(e.target.value); setDatasetResult(null); }}
+            >
+              <option value="" className="bg-slate-900">Select dataset…</option>
+              {datasets.map((d) => (
+                <option key={d.id} value={d.id} className="bg-slate-900">
+                  {d.name} ({d.num_students} students{d.has_labels ? ", labeled" : ""})
+                </option>
+              ))}
+            </select>
+          </div>
+          <GlowButton onClick={runDatasetPredict} disabled={!selectedDatasetId || predicting} variant="gradient">
+            {predicting ? "Predicting…" : "Run Predictions"}
+          </GlowButton>
+          {datasets.find((d) => d.id === selectedDatasetId)?.has_labels && (
+            <GlowButton onClick={runDatasetTrain} disabled={!selectedDatasetId || training} variant="ghost">
+              {training ? "Training…" : "Train on Dataset"}
+            </GlowButton>
+          )}
+        </div>
+        {datasetMsg && (
+          <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-white/70">{datasetMsg}</div>
+        )}
+        {datasetResult && (
+          <div className="mt-4 max-h-64 overflow-y-auto rounded-lg border border-white/10">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-950/90">
+                <tr>
+                  {["Student", "Prediction", "Flagged %", "Clean %"].map((h) => (
+                    <th key={h} className="border-b border-white/10 p-2 text-left font-semibold uppercase tracking-wider text-white/40">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {datasetResult.predictions.map((p) => (
+                  <tr key={p.student_id} className="border-b border-white/5">
+                    <td className="p-2 text-white/80">{p.student_id}</td>
+                    <td className={`p-2 font-semibold ${p.prediction === "flagged" ? "text-rose-400" : "text-emerald-400"}`}>{p.prediction}</td>
+                    <td className="p-2 text-white/50">{(p.flagged_prob * 100).toFixed(1)}%</td>
+                    <td className="p-2 text-white/50">{(p.clean_prob * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </GlowCard>
 
       <GlowCard
         className="mb-8"
