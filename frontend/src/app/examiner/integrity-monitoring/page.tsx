@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import api from "@/lib/api";
 import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/DashboardShell";
@@ -220,7 +220,7 @@ export default function IntegrityMonitoringPage() {
     } finally { setPredicting(false); }
   }
 
-  async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleCsvUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return;
     setUploading(true); setPredMsg("");
     try {
@@ -562,8 +562,7 @@ function ResultsSection({ predResult, sub, highThreshold, medThreshold }: { pred
   );
 }
 
-function GraphSection({ nodes, edges, positions, layout, setLayout, svgRef, selectedNodeIdx, setSelectedNodeIdx, onDownload, sub, GW, GH }: { nodes: PredResult[]; edges: [number, number][]; positions: { x: number; y: number }[]; layout: Layout; setLayout: (v: Layout) => void; svgRef: React.RefObject<SVGSVGElement>; selectedNodeIdx: number | null; setSelectedNodeIdx: (v: number | null) => void; onDownload: () => void; sub: string; GW: number; GH: number; }) {
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; node: PredResult } | null>(null);
+function GraphSection({ nodes, edges, positions, layout, setLayout, svgRef, selectedNodeIdx, setSelectedNodeIdx, onDownload, sub, GW, GH }: { nodes: PredResult[]; edges: [number, number][]; positions: { x: number; y: number }[]; layout: Layout; setLayout: (v: Layout) => void; svgRef: RefObject<SVGSVGElement | null>; selectedNodeIdx: number | null; setSelectedNodeIdx: (v: number | null) => void; onDownload: () => void; sub: string; GW: number; GH: number; }) {
   const selNode = selectedNodeIdx !== null ? nodes[selectedNodeIdx] : null;
 
   return (
@@ -578,7 +577,7 @@ function GraphSection({ nodes, edges, positions, layout, setLayout, svgRef, sele
       </GlowCard>
       {nodes.length === 0 ? <Empty msg="No prediction data for graph. Run a prediction first." /> : (
         <GlowCard>
-          <div className="relative overflow-hidden rounded-xl" onMouseLeave={() => setTooltip(null)}>
+          <div className="relative overflow-hidden rounded-xl">
             <svg ref={svgRef} width={GW} height={GH} className="w-full max-h-[520px]" style={{ background: "rgba(255,255,255,0.01)" }}>
               <defs>
                 <radialGradient id="cheat_node"><stop offset="0%" stopColor="#f87171" stopOpacity={0.9} /><stop offset="100%" stopColor="#dc2626" stopOpacity={0.6} /></radialGradient>
@@ -588,7 +587,7 @@ function GraphSection({ nodes, edges, positions, layout, setLayout, svgRef, sele
                 <line key={i} x1={positions[s].x} y1={positions[s].y} x2={positions[t].x} y2={positions[t].y} stroke="rgba(255,200,100,0.25)" strokeWidth={1.5} strokeDasharray="4 3" />
               ))}
               {nodes.map((nd, i) => { if (!positions[i]) return null; const isCheat = nd.prediction === "cheater"; const r = 7 + nd.flagged_prob * 10; return (
-                <g key={nd.student_id} transform={`translate(${positions[i].x},${positions[i].y})`} onClick={() => setSelectedNodeIdx(i === selectedNodeIdx ? null : i)} onMouseEnter={(e) => setTooltip({ x: e.clientX, y: e.clientY, node: nd })} className="cursor-pointer">
+                <g key={nd.student_id} transform={`translate(${positions[i].x},${positions[i].y})`} onClick={() => setSelectedNodeIdx(i === selectedNodeIdx ? null : i)} className="cursor-pointer">
                   <circle r={r} fill={isCheat ? "url(#cheat_node)" : "url(#honest_node)"} stroke={selectedNodeIdx === i ? "white" : "rgba(0,0,0,0.4)"} strokeWidth={selectedNodeIdx === i ? 2.5 : 0.8} />
                   <text textAnchor="middle" dy={r + 12} fontSize={8} fill="rgba(255,255,255,0.45)" className="select-none pointer-events-none">{nd.student_name.split(" ")[0]}</text>
                 </g>
@@ -628,7 +627,6 @@ function GraphSection({ nodes, edges, positions, layout, setLayout, svgRef, sele
 }
 
 function AnalyzeSection({ benchmark, loading, onLoad, sub }: { benchmark: BenchmarkResult | null; loading: boolean; onLoad: () => void; sub: string; }) {
-  const current = benchmark?.results[0];
   return (
     <div className="space-y-6">
       <SectionHeader title={sub === "confusion" ? "Confusion Matrix" : sub === "fp" ? "False Positive Analysis" : sub === "fn" ? "False Negative Analysis" : sub === "classification" ? "Classification Report" : "Model Metrics"} desc="Evaluated on synthetic benchmark data with known labels" />
