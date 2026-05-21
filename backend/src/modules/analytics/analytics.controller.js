@@ -219,4 +219,162 @@ function groupByField(sessions, field) {
   return groups;
 }
 
-module.exports = { getExamStats, getGradeBoundaries, getCourseAnalytics, getScaledScores };
+async function getStudentScores(req, res, next) {
+  try {
+    const { examId } = req.params;
+    const sessions = await prisma.examSession.findMany({
+      where: { examId, status: "SUBMITTED" },
+      include: {
+        student: {
+          select: { id: true, firstName: true, lastName: true, studentId: true, program: true, gender: true, avatarUrl: true },
+        },
+      },
+      orderBy: { score: "desc" },
+    });
+    const maxScore = sessions[0]?.maxScore || 1;
+    const result = sessions.map((s, i) => {
+      const ms =
+        s.submittedAt && s.startedAt
+          ? new Date(s.submittedAt).getTime() - new Date(s.startedAt).getTime()
+          : null;
+      return {
+        rank: i + 1,
+        sessionId: s.id,
+        student: s.student,
+        score: s.score || 0,
+        maxScore: s.maxScore || 0,
+        percentage: Number(((( s.score || 0) / maxScore) * 100).toFixed(1)),
+        durationMinutes: ms != null ? Math.round((ms / 60000) * 10) / 10 : null,
+        submittedAt: s.submittedAt,
+      };
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getQuestionAnalytics(req, res, next) {
+  try {
+    const { examId } = req.params;
+    const [questions, totalSessions] = await Promise.all([
+      prisma.question.findMany({
+        where: { examId },
+        include: { answers: { select: { isCorrect: true } } },
+        orderBy: { order: "asc" },
+      }),
+      prisma.examSession.count({ where: { examId, status: "SUBMITTED" } }),
+    ]);
+    const result = questions.map((q, i) => {
+      const totalAnswered = q.answers.length;
+      const correct = q.answers.filter((a) => a.isCorrect === true).length;
+      const incorrect = totalAnswered - correct;
+      const skipped = Math.max(0, totalSessions - totalAnswered);
+      const correctRate = totalAnswered > 0 ? (correct / totalAnswered) * 100 : 0;
+      return {
+        questionId: q.id,
+        questionNumber: i + 1,
+        text: q.text.length > 120 ? q.text.substring(0, 120) + "…" : q.text,
+        type: q.type,
+        marks: q.marks,
+        totalAnswered,
+        correct,
+        incorrect,
+        skipped,
+        correctRate: Number(correctRate.toFixed(1)),
+        difficulty: correctRate < 30 ? "Hard" : correctRate < 60 ? "Medium" : "Easy",
+      };
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getLeaderboard(req, res, next) {
+  try {
+    const { examId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit || "20", 10), 100);
+    const sessions = await prisma.examSession.findMany({
+      where: { examId, status: "SUBMITTED" },
+      include: {
+        student: { select: { id: true, firstName: true, lastName: true, studentId: true, program: true, avatarUrl: true } },
+      },
+      orderBy: { score: "desc" },
+      take: limit,
+    });
+    const maxScore = sessions[0]?.maxScore || 1;
+    const result = sessions.map((s, i) => ({
+      rank: i + 1,
+      student: s.student,
+      score: s.score || 0,
+      maxScore: s.maxScore || 0,
+      percentage: Number((((s.score || 0) / maxScore) * 100).toFixed(1)),
+    }));
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getTimeAnalytics(req, res, next) {
+  try {
+    const { examId } = req.params;
+    const exam = await prisma.exam.findUnique({ where: { id: examId }, select: { durationMinutes: true } });
+    const sessions = await prisma.examSession.findMany({
+      where: { examId, status: "SUBMITTED", startedAt: { not: null }, submittedAt: { not: null } },
+      include: { student: { select: { id: true, firstName: true, lastName: true, studentId: true } } },
+    });
+    if (sessions.length === 0) {
+      return res.json({ success: true, data: { avgDurationMinutes: 0, sessions: [], fastest: [], suspicious: [] } });
+    }
+    const timings = sessions
+      .map((s) => ({
+        sessionId: s.id,
+        student: s.student,
+        durationMinutes: Math.round(((new Date(s.submittedAt).getTime() - new Date(s.startedAt).getTime()) / 60000) * 10) / 10,
+        score: s.score || 0,
+        submittedAt: s.submittedAt,
+      }))
+      .sort((a, b) => a.durationMinutes - b.durationMinutes);
+    const durations = timings.map((t) => t.durationMinutes);
+    const avg = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const threshold = exam?.durationMinutes ? exam.durationMinutes * 0.15 : 3;
+    res.json({
+      success: true,
+      data: {
+        avgDurationMinutes: Math.round(avg * 10) / 10,
+        fastestMinutes: durations[0],
+        slowestMinutes: durations[durations.length - 1],
+        allowedMinutes: exam?.durationMinutes || null,
+        suspiciousThresholdMinutes: Math.round(threshold * 10) / 10,
+        sessions: timings,
+        fastest: timings.slice(0, 10),
+        suspicious: timings.filter((t) => t.durationMinutes < threshold),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getSessionSummary(req, res, next) {
+  try {
+    const { examId } = req.params;
+    const groups = await prisma.examSession.groupBy({
+      by: ["status"],
+      where: { examId },
+      _count: { id: true },
+    });
+    const summary = {};
+    for (const g of groups) summary[g.status] = g._count.id;
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  getExamStats, getGradeBoundaries, getCourseAnalytics, getScaledScores,
+  getStudentScores, getQuestionAnalytics, getLeaderboard, getTimeAnalytics, getSessionSummary,
+};
