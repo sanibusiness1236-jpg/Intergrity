@@ -21,7 +21,7 @@ export default function RegisterPage() {
     password: "",
     firstName: "",
     lastName: "",
-    role: "STUDENT",
+    role: "",
     studentId: "",
     program: "",
     gender: "",
@@ -102,7 +102,10 @@ export default function RegisterPage() {
         />
 
         <div className="grid gap-1.5">
-          <label className="text-xs font-medium text-white/70">I am a...</label>
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-white/70">I am a... <span className="text-red-400">*</span></label>
+            <span className="text-[10px] text-white/30">Cannot be changed after registration</span>
+          </div>
           <div className="grid grid-cols-3 gap-2">
             {ROLES.map((r) => (
               <button
@@ -111,7 +114,7 @@ export default function RegisterPage() {
                 onClick={() => update("role", r.value)}
                 className={`h-10 rounded-lg border text-xs font-medium transition-all ${
                   form.role === r.value
-                    ? "border-white/40 bg-white/15 text-white shadow-lg shadow-indigo-500/20"
+                    ? "border-indigo-400/60 bg-indigo-500/20 text-white shadow-lg shadow-indigo-500/20"
                     : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:text-white/90"
                 }`}
               >
@@ -119,6 +122,9 @@ export default function RegisterPage() {
               </button>
             ))}
           </div>
+          {!form.role && (
+            <p className="text-[11px] text-amber-400/80">Please select your role to continue.</p>
+          )}
         </div>
 
         {form.role === "STUDENT" && (
@@ -154,7 +160,7 @@ export default function RegisterPage() {
 
         <button
           type="submit"
-          disabled={isLoading}
+          disabled={isLoading || !form.role}
           className="auth-shimmer-btn group relative mt-2 inline-flex h-12 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 px-6 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all duration-300 hover:shadow-xl hover:shadow-purple-500/40 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <span className="relative z-10">{isLoading ? "Creating account..." : "Create Account"}</span>
