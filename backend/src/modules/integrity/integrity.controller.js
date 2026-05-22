@@ -425,6 +425,184 @@ async function predictExamIntegrity(req, res, next) {
   }
 }
 
+/* ─── Live Session ─────────────────────────────────────────── */
+async function getLiveSessions(req, res, next) {
+  try {
+    const { examId, search, gender } = req.query;
+    if (!examId) throw new AppError("examId is required", 400);
+
+    const exam = await prisma.exam.findFirst({
+      where: { id: examId, createdById: req.user.id },
+      select: { title: true, courseCode: true },
+    });
+    if (!exam) throw new AppError("Exam not found", 404);
+
+    const sessions = await prisma.examSession.findMany({
+      where: { examId },
+      include: {
+        student: {
+          select: { id: true, firstName: true, lastName: true, email: true, studentId: true, gender: true, program: true },
+        },
+        behavioralFlags: { orderBy: { createdAt: "asc" } },
+      },
+      orderBy: { startedAt: "desc" },
+    });
+
+    let rows = sessions.map((s) => {
+      const cf = (t) => s.behavioralFlags.filter((f) => f.flagType === t).length;
+      return {
+        sessionId: s.id,
+        studentDbId: s.student.id,
+        studentName: `${s.student.firstName} ${s.student.lastName}`,
+        studentUsername: s.student.email?.split("@")[0] || s.student.studentId || s.student.id,
+        gender: s.student.gender || "",
+        program: s.student.program || "",
+        status: s.status,
+        tab_switch_flag: cf("TAB_SWITCH") > 0,
+        tab_switch_count: cf("TAB_SWITCH"),
+        time_away_exam_site: cf("WINDOW_BLUR"),
+        answer_paste_flag: cf("PASTE_EVENT") > 0,
+        usb_device_detection_count: cf("USB_DETECTED"),
+        window_minimize_flag: cf("WINDOW_BLUR") > 0,
+        multi_device_login_flag: cf("MULTI_DEVICE") > 0,
+        total_flags: s.behavioralFlags.length,
+        lastFlagAt: s.behavioralFlags.length > 0 ? s.behavioralFlags[s.behavioralFlags.length - 1].createdAt : null,
+        startedAt: s.startedAt,
+      };
+    });
+
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(
+        (r) => r.studentName.toLowerCase().includes(q) || r.studentUsername.toLowerCase().includes(q)
+      );
+    }
+    if (gender) rows = rows.filter((r) => r.gender?.toLowerCase() === gender.toLowerCase());
+
+    res.json({ success: true, data: { exam, rows, polledAt: new Date().toISOString() } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getSessionDeepLog(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+
+    const session = await prisma.examSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        student: { select: { firstName: true, lastName: true, email: true, studentId: true } },
+        behavioralFlags: { orderBy: { createdAt: "asc" } },
+        answers: { orderBy: { answeredAt: "asc" } },
+        exam: { select: { title: true, courseCode: true } },
+      },
+    });
+    if (!session) throw new AppError("Session not found", 404);
+
+    const FLAG_META = {
+      TAB_SWITCH:   { category: "Tab Activity",       description: "Browser tab switched or new tab opened",         severity: "high" },
+      PASTE_EVENT:  { category: "Clipboard Activity",  description: "Copy / paste event detected in answer field",    severity: "high" },
+      WINDOW_BLUR:  { category: "Window Activity",     description: "Exam window lost focus or was minimised",        severity: "medium" },
+      USB_DETECTED: { category: "Device Activity",     description: "USB device plugged in during exam",              severity: "high" },
+      MULTI_DEVICE: { category: "Network / Device",    description: "Login detected from multiple devices at once",   severity: "critical" },
+      RIGHT_CLICK:  { category: "Interaction",         description: "Right-click context menu triggered",             severity: "low" },
+      DEVTOOLS:     { category: "Developer Tools",     description: "Browser developer-tools panel opened",           severity: "critical" },
+      INACTIVITY:   { category: "Inactivity",          description: "Extended period of inactivity detected (>90 s)", severity: "medium" },
+      PRINT_ATTEMPT:{ category: "Print / Screenshot",  description: "Print-screen or screen-capture attempt detected","severity": "medium" },
+      DRAG_DROP:    { category: "Clipboard Activity",  description: "Drag-and-drop text detected in answer field",    severity: "medium" },
+      RAPID_SWITCH: { category: "Tab Activity",        description: "Rapid repeated tab switching (>3 switches / 10 s)", severity: "high" },
+      EXTERNAL_LINK:{ category: "Navigation",          description: "Navigation to external URL detected",            severity: "high" },
+      FULLSCREEN_EXIT:{ category: "Window Activity",   description: "Exited mandatory fullscreen mode",               severity: "medium" },
+      KEYBOARD_SHORTCUT:{ category: "Interaction",     description: "Suspicious keyboard shortcut used (Ctrl+A / Ctrl+F / F12)", severity: "low" },
+    };
+
+    const flagLogs = session.behavioralFlags.map((f) => ({
+      timestamp: f.createdAt,
+      type: f.flagType,
+      category: FLAG_META[f.flagType]?.category || "Unknown",
+      description: FLAG_META[f.flagType]?.description || f.flagType.replace(/_/g, " ").toLowerCase(),
+      severity: FLAG_META[f.flagType]?.severity || "low",
+    }));
+
+    const answerLogs = session.answers
+      .filter((a) => a.answeredAt)
+      .map((a, i) => ({
+        timestamp: a.answeredAt,
+        type: "ANSWER_SUBMITTED",
+        category: "Answer Activity",
+        description: `Answer submitted for question ${i + 1}`,
+        severity: "info",
+      }));
+
+    const allLogs = [...flagLogs, ...answerLogs].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+
+    const countType = (t) => flagLogs.filter((f) => f.type === t).length;
+
+    res.json({
+      success: true,
+      data: {
+        student: {
+          name: `${session.student.firstName} ${session.student.lastName}`,
+          id: session.student.studentId || session.student.email,
+        },
+        exam: { title: session.exam.title, code: session.exam.courseCode },
+        status: session.status,
+        startedAt: session.startedAt,
+        submittedAt: session.submittedAt,
+        logs: allLogs,
+        summary: {
+          total: allLogs.length,
+          tab_switches: countType("TAB_SWITCH"),
+          paste_events: countType("PASTE_EVENT"),
+          window_blurs: countType("WINDOW_BLUR"),
+          usb_detections: countType("USB_DETECTED"),
+          multi_device: countType("MULTI_DEVICE"),
+          devtools: countType("DEVTOOLS"),
+          inactivity: countType("INACTIVITY"),
+          right_clicks: countType("RIGHT_CLICK"),
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteSessionData(req, res, next) {
+  try {
+    const { examId, password } = req.body;
+    if (!examId || !password) throw new AppError("examId and password are required", 400);
+
+    const bcrypt = require("bcryptjs");
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user) throw new AppError("User not found", 404);
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) throw new AppError("Incorrect password", 401);
+
+    const sessions = await prisma.examSession.findMany({
+      where: { examId, exam: { createdById: req.user.id } },
+      select: { id: true },
+    });
+    if (sessions.length === 0) throw new AppError("No sessions found for this exam", 404);
+
+    const sessionIds = sessions.map((s) => s.id);
+    const deleted = await prisma.behavioralFlag.deleteMany({
+      where: { examSessionId: { in: sessionIds } },
+    });
+
+    res.json({
+      success: true,
+      message: `Deleted ${deleted.count} behavioral flag records from ${sessionIds.length} sessions.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   predictVenue,
   getModels,
@@ -439,4 +617,7 @@ module.exports = {
   getIntegrityOverview,
   getExamActivityData,
   predictExamIntegrity,
+  getLiveSessions,
+  getSessionDeepLog,
+  deleteSessionData,
 };

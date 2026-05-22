@@ -37,4 +37,8 @@ router.get("/overview", ctrl.getIntegrityOverview);
 router.get("/exam/:examId/activity", ctrl.getExamActivityData);
 router.post("/exam/:examId/predict", ctrl.predictExamIntegrity);
 
+router.get("/live-sessions", ctrl.getLiveSessions);
+router.get("/live-sessions/:sessionId/deep-log", ctrl.getSessionDeepLog);
+router.delete("/live-sessions", ctrl.deleteSessionData);
+
 module.exports = router;
