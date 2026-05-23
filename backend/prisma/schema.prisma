@@ -205,11 +205,12 @@ model ExamSession {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
+  attemptNumber   Int           @default(1)
+
   answers         Answer[]
   behavioralFlags BehavioralFlag[]
   seatingAssignment SeatingAssignment?
 
-  @@unique([examId, studentId])
   @@map("exam_sessions")
 }
 

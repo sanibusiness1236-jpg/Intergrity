@@ -7,47 +7,91 @@ const AUTOSAVE_TTL = 60 * 60 * 4; // 4 hours
 
 async function startSession(req, res, next) {
   try {
-    const { examId } = req.body;
+    const { examId, password } = req.body;
     const studentId = req.user.id;
 
     const exam = await prisma.exam.findUnique({ where: { id: examId } });
-    if (!exam || exam.status !== "PUBLISHED" && exam.status !== "ACTIVE") {
+    if (!exam) throw new AppError("Exam not found", 404);
+    if (exam.status !== "PUBLISHED" && exam.status !== "ACTIVE") {
       throw new AppError("Exam not available", 400);
     }
 
-    let session = await prisma.examSession.findUnique({
-      where: { examId_studentId: { examId, studentId } },
+    // Verify exam password if one is set
+    if (exam.examPassword) {
+      if (!password || password !== exam.examPassword) {
+        throw new AppError("Incorrect exam password", 401);
+      }
+    }
+
+    // All sessions for this student + exam, newest first
+    const allSessions = await prisma.examSession.findMany({
+      where: { examId, studentId },
+      orderBy: { createdAt: "desc" },
     });
 
-    if (session && session.status === "SUBMITTED") {
-      throw new AppError("Exam already submitted", 400);
-    }
+    // Resume any active/disconnected session
+    const activeSession = allSessions.find(
+      (s) => s.status === "IN_PROGRESS" || s.status === "WAITING" || s.status === "DISCONNECTED"
+    );
+    if (activeSession) {
+      const session =
+        activeSession.status !== "IN_PROGRESS"
+          ? await prisma.examSession.update({
+              where: { id: activeSession.id },
+              data: { status: "IN_PROGRESS" },
+            })
+          : activeSession;
 
-    if (!session) {
-      session = await prisma.examSession.create({
+      const savedAnswers = await redis.get(`${AUTOSAVE_PREFIX}${session.id}`);
+      const attemptsUsed = allSessions.filter(
+        (s) => s.status === "SUBMITTED" || s.status === "TIMED_OUT"
+      ).length;
+
+      return res.json({
+        success: true,
         data: {
-          examId,
-          studentId,
-          status: "IN_PROGRESS",
-          startedAt: new Date(),
-          ipAddress: req.ip,
-          userAgent: req.get("user-agent"),
+          session,
+          recoveredAnswers: savedAnswers ? JSON.parse(savedAnswers) : null,
+          attemptNumber: session.attemptNumber,
+          attemptsUsed,
+          maxAttempts: exam.maxAttempts,
         },
       });
-    } else if (session.status === "DISCONNECTED" || session.status === "WAITING") {
-      session = await prisma.examSession.update({
-        where: { id: session.id },
-        data: { status: "IN_PROGRESS", startedAt: session.startedAt || new Date() },
-      });
     }
 
-    const savedAnswers = await redis.get(`${AUTOSAVE_PREFIX}${session.id}`);
+    // Count completed attempts and enforce max
+    const completedAttempts = allSessions.filter(
+      (s) => s.status === "SUBMITTED" || s.status === "TIMED_OUT"
+    ).length;
+
+    if (completedAttempts >= exam.maxAttempts) {
+      throw new AppError(
+        `No attempts remaining. You have used all ${exam.maxAttempts} attempt(s) for this exam.`,
+        400
+      );
+    }
+
+    // Create a fresh session
+    const session = await prisma.examSession.create({
+      data: {
+        examId,
+        studentId,
+        status: "IN_PROGRESS",
+        startedAt: new Date(),
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
+        attemptNumber: completedAttempts + 1,
+      },
+    });
 
     res.json({
       success: true,
       data: {
         session,
-        recoveredAnswers: savedAnswers ? JSON.parse(savedAnswers) : null,
+        recoveredAnswers: null,
+        attemptNumber: session.attemptNumber,
+        attemptsUsed: completedAttempts,
+        maxAttempts: exam.maxAttempts,
       },
     });
   } catch (err) {

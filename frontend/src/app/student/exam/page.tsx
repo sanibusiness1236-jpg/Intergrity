@@ -267,20 +267,31 @@ function ExamCard({ row }: { row: ExamRow }) {
         </span>
       );
     }
-    if (session?.score !== null && session?.score !== undefined && session?.maxScore) {
-      const pct = Math.round((session.score / session.maxScore) * 100);
-      const passing = pct >= 50;
-      return (
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-wider text-white/40">Result</p>
-          <p className={`text-sm font-bold ${passing ? "text-emerald-300" : "text-amber-300"}`}>
-            {session.score}/{session.maxScore}
-            <span className="ml-1 text-xs text-white/50">({pct}%)</span>
-          </p>
-        </div>
-      );
-    }
-    return <span className="text-xs text-white/40">Awaiting result</span>;
+    // Check if retake is allowed (exam must be available and attempts remain)
+    const maxAttempts = (exam as any).maxAttempts ?? 1;
+    const attemptNumber = (session as any)?.attemptNumber ?? 1;
+    const canRetake = isAvailableNow(exam as any) && attemptNumber < maxAttempts;
+
+    return (
+      <div className="flex items-center gap-3">
+        {session?.score !== null && session?.score !== undefined && session?.maxScore ? (
+          <div className="text-right">
+            <p className="text-[10px] uppercase tracking-wider text-white/40">Result</p>
+            <p className={`text-sm font-bold ${Math.round((session.score / session.maxScore) * 100) >= 50 ? "text-emerald-300" : "text-amber-300"}`}>
+              {session.score}/{session.maxScore}
+              <span className="ml-1 text-xs text-white/50">({Math.round((session.score / session.maxScore) * 100)}%)</span>
+            </p>
+          </div>
+        ) : (
+          <span className="text-xs text-white/40">Awaiting result</span>
+        )}
+        {canRetake && (
+          <Link href={`/student/exam/${exam.id}`}>
+            <GlowButton variant="gradient" size="sm">Retake →</GlowButton>
+          </Link>
+        )}
+      </div>
+    );
   })();
 
   return (
