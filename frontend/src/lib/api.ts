@@ -11,9 +11,24 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
  */
 const TOKEN_KEYS = { access: "accessToken", refresh: "refreshToken" } as const;
 
+/** Reads the access token — sessionStorage first, then falls back to a
+ *  one-time localStorage migration for users who were logged in before we
+ *  switched storage strategies. */
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(TOKEN_KEYS.access) || localStorage.getItem(TOKEN_KEYS.access);
+  const ss = sessionStorage.getItem(TOKEN_KEYS.access);
+  if (ss) return ss;
+  // One-time migration: move any old localStorage token into sessionStorage
+  // so this tab adopts it and localStorage can't interfere with other tabs.
+  const ls = localStorage.getItem(TOKEN_KEYS.access);
+  if (ls) {
+    const lsRefresh = localStorage.getItem(TOKEN_KEYS.refresh);
+    sessionStorage.setItem(TOKEN_KEYS.access, ls);
+    if (lsRefresh) sessionStorage.setItem(TOKEN_KEYS.refresh, lsRefresh);
+    localStorage.removeItem(TOKEN_KEYS.access);
+    localStorage.removeItem(TOKEN_KEYS.refresh);
+  }
+  return ls;
 }
 export function getRefreshToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -23,7 +38,6 @@ export function setAuthTokens(accessToken: string, refreshToken: string) {
   if (typeof window === "undefined") return;
   sessionStorage.setItem(TOKEN_KEYS.access, accessToken);
   sessionStorage.setItem(TOKEN_KEYS.refresh, refreshToken);
-  // Migrate away from any old localStorage tokens so they never clobber a tab.
   localStorage.removeItem(TOKEN_KEYS.access);
   localStorage.removeItem(TOKEN_KEYS.refresh);
 }
