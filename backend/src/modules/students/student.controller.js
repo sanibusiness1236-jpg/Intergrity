@@ -29,7 +29,20 @@ async function getStudentExams(req, res, next) {
     const sessions = await prisma.examSession.findMany({
       where: { studentId },
       include: {
-        exam: { select: { id: true, title: true, courseCode: true, courseName: true } },
+        exam: {
+          select: {
+            id: true,
+            title: true,
+            courseCode: true,
+            courseName: true,
+            status: true,
+            isActive: true,
+            startTime: true,
+            endTime: true,
+            maxAttempts: true,
+            durationMinutes: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     });

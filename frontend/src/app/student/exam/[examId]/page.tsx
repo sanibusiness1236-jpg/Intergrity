@@ -313,7 +313,8 @@ export default function ExamTakingPage() {
   if (phase === "submitted" && result) {
     const pct = Number(result.percentage);
     const pass = pct >= 50;
-    const canRetake = attemptInfo && attemptInfo.attemptsUsed < attemptInfo.maxAttempts - 1;
+    // attemptsUsed = count before this attempt; add 1 for current → retake if still under cap
+    const canRetake = attemptInfo && (attemptInfo.attemptsUsed + 1) < attemptInfo.maxAttempts;
     return (
       <div className="flex h-screen items-center justify-center bg-slate-950 p-4">
         <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-8 text-center shadow-2xl space-y-5">

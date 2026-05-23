@@ -17,48 +17,54 @@ const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
 );
 
 const SESSION_TONE: Record<string, string> = {
-  IN_PROGRESS: "border-amber-500/40 bg-amber-500/15 text-amber-200",
-  WAITING: "border-white/15 bg-white/5 text-white/70",
-  SUBMITTED: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
-  TIMED_OUT: "border-rose-500/40 bg-rose-500/15 text-rose-200",
+  IN_PROGRESS:  "border-amber-500/40 bg-amber-500/15 text-amber-200",
+  WAITING:      "border-white/15 bg-white/5 text-white/70",
+  SUBMITTED:    "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
+  TIMED_OUT:    "border-rose-500/40 bg-rose-500/15 text-rose-200",
   DISCONNECTED: "border-rose-500/40 bg-rose-500/15 text-rose-200",
 };
 
 type SessionWithExam = ExamSession & {
-  exam: { id: string; title: string; courseCode: string; courseName: string };
+  exam: {
+    id: string; title: string; courseCode: string; courseName: string;
+    status: string; isActive: boolean; startTime?: string; endTime?: string;
+    maxAttempts: number; durationMinutes: number;
+  };
+  attemptNumber?: number;
 };
 
 type RowKind = "in_progress" | "available" | "upcoming" | "completed";
 
 interface ExamRow {
   exam: Exam | SessionWithExam["exam"];
+  /** Most recent session for this exam (may be null for pure upcoming rows). */
   session?: SessionWithExam;
   kind: RowKind;
   startTime?: string;
   endTime?: string;
   durationMinutes?: number;
+  /** How many attempts the student has already submitted. */
+  completedCount: number;
+  /** Examiner-configured limit. */
+  maxAttempts: number;
 }
 
 function fmtDate(iso?: string) {
   if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
   });
 }
 
 function isAvailableNow(exam: Pick<Exam, "status" | "startTime" | "endTime">) {
   const now = Date.now();
   const start = exam.startTime ? new Date(exam.startTime).getTime() : null;
-  const end = exam.endTime ? new Date(exam.endTime).getTime() : null;
+  const end   = exam.endTime   ? new Date(exam.endTime  ).getTime() : null;
   if (exam.status === "ACTIVE") return true;
   if (exam.status === "PUBLISHED") {
     if (start && start > now) return false;
-    if (end && end < now) return false;
+    if (end   && end   < now) return false;
     return true;
   }
   return false;
@@ -66,9 +72,9 @@ function isAvailableNow(exam: Pick<Exam, "status" | "startTime" | "endTime">) {
 
 export default function StudentExamsListPage() {
   const { user } = useAuthStore();
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [exams,    setExams]    = useState<Exam[]>([]);
   const [sessions, setSessions] = useState<SessionWithExam[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading,  setLoading]  = useState(true);
   const [tab, setTab] = useState<"all" | RowKind>("all");
 
   useEffect(() => {
@@ -81,55 +87,86 @@ export default function StudentExamsListPage() {
     ]).then(([examList, sessList]) => {
       if (cancelled) return;
       setExams(examList);
-      setSessions(sessList);
+      setSessions(sessList);  // already sorted desc by createdAt
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [user]);
 
   const rows = useMemo<ExamRow[]>(() => {
-    const byExamId = new Map<string, SessionWithExam>();
-    for (const s of sessions) byExamId.set(s.examId, s);
+    // Group sessions by examId (array already desc by createdAt, so [0] = latest)
+    const sessionsByExam = new Map<string, SessionWithExam[]>();
+    for (const s of sessions) {
+      if (!sessionsByExam.has(s.examId)) sessionsByExam.set(s.examId, []);
+      sessionsByExam.get(s.examId)!.push(s);
+    }
 
     const out: ExamRow[] = [];
     const seen = new Set<string>();
 
+    // Pass 1 — active / resumable sessions
     for (const s of sessions) {
-      if (s.status === "IN_PROGRESS" || s.status === "WAITING") {
-        out.push({ exam: s.exam, session: s, kind: "in_progress" });
+      if (seen.has(s.examId)) continue;
+      if (s.status === "IN_PROGRESS" || s.status === "WAITING" || s.status === "DISCONNECTED") {
+        const examSessions = sessionsByExam.get(s.examId) ?? [];
+        const completedCount = examSessions.filter(
+          (x) => x.status === "SUBMITTED" || x.status === "TIMED_OUT"
+        ).length;
+        const maxAttempts = (s.exam as any).maxAttempts ?? 1;
+        out.push({ exam: s.exam, session: s, kind: "in_progress", completedCount, maxAttempts,
+          startTime: (s.exam as any).startTime, endTime: (s.exam as any).endTime,
+          durationMinutes: (s.exam as any).durationMinutes });
         seen.add(s.examId);
       }
     }
 
+    // Pass 2 — exams from the master list
     for (const e of exams) {
       if (seen.has(e.id)) continue;
-      const existing = byExamId.get(e.id);
-      if (existing && (existing.status === "SUBMITTED" || existing.status === "TIMED_OUT")) {
-        out.push({
-          exam: e, session: existing, kind: "completed",
-          startTime: e.startTime, endTime: e.endTime, durationMinutes: e.durationMinutes,
-        });
+      const examSessions  = sessionsByExam.get(e.id) ?? [];
+      const completedCount = examSessions.filter(
+        (s) => s.status === "SUBMITTED" || s.status === "TIMED_OUT"
+      ).length;
+      const maxAttempts = (e as any).maxAttempts ?? 1;
+      const latestSession = examSessions[0]; // most recent (sessions sorted desc)
+
+      if (isAvailableNow(e)) {
+        if (completedCount < maxAttempts) {
+          // Still has attempts left → available (first attempt OR retake)
+          out.push({ exam: e, session: latestSession, kind: "available", completedCount,
+            maxAttempts, startTime: e.startTime, endTime: e.endTime,
+            durationMinutes: e.durationMinutes });
+        } else {
+          // All attempts exhausted but exam is still open
+          out.push({ exam: e, session: latestSession, kind: "completed", completedCount,
+            maxAttempts, startTime: e.startTime, endTime: e.endTime,
+            durationMinutes: e.durationMinutes });
+        }
         seen.add(e.id);
         continue;
       }
-      if (isAvailableNow(e)) {
-        out.push({
-          exam: e, kind: "available",
-          startTime: e.startTime, endTime: e.endTime, durationMinutes: e.durationMinutes,
-        });
+
+      // Exam not open right now
+      if (completedCount > 0) {
+        out.push({ exam: e, session: latestSession, kind: "completed", completedCount,
+          maxAttempts, startTime: e.startTime, endTime: e.endTime,
+          durationMinutes: e.durationMinutes });
         seen.add(e.id);
-      } else if (e.status === "PUBLISHED" && e.startTime && new Date(e.startTime).getTime() > Date.now()) {
-        out.push({
-          exam: e, kind: "upcoming",
-          startTime: e.startTime, endTime: e.endTime, durationMinutes: e.durationMinutes,
-        });
+      } else if (
+        e.status === "PUBLISHED" && e.startTime &&
+        new Date(e.startTime).getTime() > Date.now()
+      ) {
+        out.push({ exam: e, kind: "upcoming", completedCount: 0, maxAttempts,
+          startTime: e.startTime, endTime: e.endTime, durationMinutes: e.durationMinutes });
         seen.add(e.id);
       }
     }
 
+    // Pass 3 — sessions whose exam isn't in the public list anymore (edge case)
     for (const s of sessions) {
       if (seen.has(s.examId)) continue;
       if (s.status === "SUBMITTED" || s.status === "TIMED_OUT") {
-        out.push({ exam: s.exam, session: s, kind: "completed" });
+        out.push({ exam: s.exam, session: s, kind: "completed", completedCount: 1,
+          maxAttempts: (s.exam as any).maxAttempts ?? 1 });
         seen.add(s.examId);
       }
     }
@@ -170,32 +207,27 @@ export default function StudentExamsListPage() {
             <GradientHeading
               title="Exams"
               highlight="My"
-              subtitle="Continue an in-progress attempt, start an available exam, or review past attempts."
+              subtitle="Continue an in-progress attempt, start or retake an available exam, or review past results."
             />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatCard label="In progress" value={counts.in_progress} accent="amber" icon={<Icon d="M12 6v6l4 2" />} />
-          <StatCard label="Available now" value={counts.available} accent="emerald" icon={<Icon d="M5 13l4 4L19 7" />} />
-          <StatCard label="Upcoming" value={counts.upcoming} accent="indigo" icon={<Icon d="M8 7V3m8 4V3M3 11h18M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />} />
-          <StatCard label="Completed" value={counts.completed} accent="purple" icon={<Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" />} />
+          <StatCard label="In progress"   value={counts.in_progress} accent="amber"   icon={<Icon d="M12 6v6l4 2" />} />
+          <StatCard label="Available now" value={counts.available}   accent="emerald" icon={<Icon d="M5 13l4 4L19 7" />} />
+          <StatCard label="Upcoming"      value={counts.upcoming}    accent="indigo"  icon={<Icon d="M8 7V3m8 4V3M3 11h18M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />} />
+          <StatCard label="Completed"     value={counts.completed}   accent="purple"  icon={<Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" />} />
         </div>
 
         <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
           {(["all", "in_progress", "available", "upcoming", "completed"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                tab === t ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
-              }`}
-            >
-              {t === "all" ? "All" :
-                t === "in_progress" ? `In Progress (${counts.in_progress})` :
-                t === "available" ? `Available (${counts.available})` :
-                t === "upcoming" ? `Upcoming (${counts.upcoming})` :
-                `Completed (${counts.completed})`}
+            <button key={t} onClick={() => setTab(t)}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${tab === t ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"}`}>
+              {t === "all"         ? "All"
+                : t === "in_progress" ? `In Progress (${counts.in_progress})`
+                : t === "available"   ? `Available (${counts.available})`
+                : t === "upcoming"    ? `Upcoming (${counts.upcoming})`
+                : `Completed (${counts.completed})`}
             </button>
           ))}
         </div>
@@ -210,7 +242,7 @@ export default function StudentExamsListPage() {
             <h3 className="mt-4 text-base font-semibold text-white">Nothing here yet</h3>
             <p className="mt-1 text-sm text-white/50">
               {tab === "all"
-                ? "No exams are assigned to you. Your examiner will publish them here when ready."
+                ? "No exams assigned to you. Your examiner will publish them here when ready."
                 : "No exams match this filter right now."}
             </p>
           </GlowCard>
@@ -226,23 +258,31 @@ export default function StudentExamsListPage() {
   );
 }
 
+/* ─────────────────────────────────────────────── */
 function ExamCard({ row }: { row: ExamRow }) {
-  const { exam, session, kind, startTime, endTime, durationMinutes } = row;
-
+  const { exam, session, kind, startTime, endTime, durationMinutes, completedCount, maxAttempts } = row;
   const startStr = fmtDate(startTime);
-  const endStr = fmtDate(endTime);
+  const endStr   = fmtDate(endTime);
+  const attemptsLeft = maxAttempts - completedCount;
+  const isRetake = completedCount > 0 && kind === "available";
+  const multiAttempt = maxAttempts > 1;
 
   const pill = (() => {
     if (kind === "in_progress") {
-      return { label: session?.status === "WAITING" ? "WAITING" : "IN PROGRESS", tone: SESSION_TONE.IN_PROGRESS, dot: "bg-amber-400 animate-pulse" };
+      return { label: session?.status === "WAITING" ? "WAITING" : "IN PROGRESS",
+               tone: SESSION_TONE.IN_PROGRESS, dot: "bg-amber-400 animate-pulse" };
     }
     if (kind === "available") {
-      return { label: "AVAILABLE NOW", tone: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200", dot: "bg-emerald-400" };
+      return isRetake
+        ? { label: "RETAKE OPEN", tone: "border-indigo-500/40 bg-indigo-500/15 text-indigo-200", dot: "bg-indigo-400 animate-pulse" }
+        : { label: "AVAILABLE NOW", tone: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200", dot: "bg-emerald-400" };
     }
     if (kind === "upcoming") {
       return { label: "UPCOMING", tone: "border-indigo-500/40 bg-indigo-500/15 text-indigo-200", dot: "bg-indigo-400" };
     }
-    return { label: session?.status?.replace(/_/g, " ") || "COMPLETED", tone: SESSION_TONE[session?.status || "SUBMITTED"], dot: "bg-purple-400" };
+    // completed
+    return { label: completedCount >= maxAttempts ? "ALL ATTEMPTS USED" : "SUBMITTED",
+             tone: SESSION_TONE.SUBMITTED, dot: "bg-purple-400" };
   })();
 
   const cta = (() => {
@@ -253,13 +293,24 @@ function ExamCard({ row }: { row: ExamRow }) {
         </Link>
       );
     }
+
     if (kind === "available") {
       return (
-        <Link href={`/student/exam/${exam.id}`}>
-          <GlowButton variant="gradient" size="sm">Start →</GlowButton>
-        </Link>
+        <div className="flex flex-col items-end gap-1">
+          <Link href={`/student/exam/${exam.id}`}>
+            <GlowButton variant="gradient" size="sm">
+              {isRetake ? "Retake →" : "Start →"}
+            </GlowButton>
+          </Link>
+          {multiAttempt && (
+            <span className="text-[10px] text-white/30">
+              {attemptsLeft} attempt{attemptsLeft !== 1 ? "s" : ""} left
+            </span>
+          )}
+        </div>
       );
     }
+
     if (kind === "upcoming") {
       return (
         <span className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/50">
@@ -267,16 +318,13 @@ function ExamCard({ row }: { row: ExamRow }) {
         </span>
       );
     }
-    // Check if retake is allowed (exam must be available and attempts remain)
-    const maxAttempts = (exam as any).maxAttempts ?? 1;
-    const attemptNumber = (session as any)?.attemptNumber ?? 1;
-    const canRetake = isAvailableNow(exam as any) && attemptNumber < maxAttempts;
 
+    // completed
     return (
-      <div className="flex items-center gap-3">
-        {session?.score !== null && session?.score !== undefined && session?.maxScore ? (
+      <div className="flex flex-col items-end gap-1">
+        {session?.score != null && session?.maxScore ? (
           <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-white/40">Result</p>
+            <p className="text-[10px] uppercase tracking-wider text-white/40">Best result</p>
             <p className={`text-sm font-bold ${Math.round((session.score / session.maxScore) * 100) >= 50 ? "text-emerald-300" : "text-amber-300"}`}>
               {session.score}/{session.maxScore}
               <span className="ml-1 text-xs text-white/50">({Math.round((session.score / session.maxScore) * 100)}%)</span>
@@ -285,10 +333,8 @@ function ExamCard({ row }: { row: ExamRow }) {
         ) : (
           <span className="text-xs text-white/40">Awaiting result</span>
         )}
-        {canRetake && (
-          <Link href={`/student/exam/${exam.id}`}>
-            <GlowButton variant="gradient" size="sm">Retake →</GlowButton>
-          </Link>
+        {multiAttempt && (
+          <span className="text-[10px] text-white/25">{completedCount}/{maxAttempts} attempts used</span>
         )}
       </div>
     );
@@ -310,6 +356,11 @@ function ExamCard({ row }: { row: ExamRow }) {
           {startStr && <span>📅 {startStr}</span>}
           {durationMinutes && <span>⏱ {durationMinutes} min</span>}
           {endStr && kind === "available" && <span>Closes {endStr}</span>}
+          {multiAttempt && kind !== "in_progress" && (
+            <span className={attemptsLeft > 0 ? "text-indigo-300/60" : "text-white/25"}>
+              🔄 {completedCount}/{maxAttempts} attempts
+            </span>
+          )}
         </div>
       </div>
       <span className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider sm:inline-flex ${pill.tone}`}>
