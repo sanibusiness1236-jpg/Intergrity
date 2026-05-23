@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
-import api from "@/lib/api";
+import api, { getAccessToken, clearAuthTokens } from "@/lib/api";
 
 interface NavItem {
   href: string;
@@ -44,7 +44,7 @@ export function PortalLayout({ children, portalName, navItems, allowedRoles }: P
   const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
-    if (!localStorage.getItem("accessToken")) {
+    if (!getAccessToken()) {
       router.push("/login");
       return;
     }
@@ -53,9 +53,14 @@ export function PortalLayout({ children, portalName, navItems, allowedRoles }: P
 
   useEffect(() => {
     if (isAuthenticated && user && !allowedRoles.includes(user.role)) {
-      router.push("/");
+      // Wrong role for this portal — clear stale session and bounce to login
+      // with a friendly explanation. This avoids the infinite redirect loop
+      // that happened when localStorage tokens were shared across tabs.
+      clearAuthTokens();
+      logout();
+      router.replace("/login?reason=role-mismatch");
     }
-  }, [isAuthenticated, user, router, allowedRoles]);
+  }, [isAuthenticated, user, router, allowedRoles, logout]);
 
   useEffect(() => {
     if (isAuthenticated) {

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
+import { getAccessToken } from "@/lib/api";
 
 function targetFor(role?: string) {
   switch (role) {
@@ -23,7 +24,7 @@ export default function Home() {
   const { isAuthenticated, user, fetchProfile } = useAuthStore();
 
   useEffect(() => {
-    const token = localStorage.getItem("accessToken");
+    const token = getAccessToken();
     if (!token) {
       router.replace("/login");
       return;

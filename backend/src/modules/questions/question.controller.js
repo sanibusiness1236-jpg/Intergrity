@@ -1,20 +1,66 @@
 const prisma = require("../../config/db");
 const { AppError } = require("../../middleware/errorHandler");
 
+const VALID_TYPES = ["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION"];
+
+function validateQuestionPayload({ type, text, correctAnswer, options }) {
+  if (!type || !VALID_TYPES.includes(type)) {
+    throw new AppError(`Invalid question type. Must be one of: ${VALID_TYPES.join(", ")}`, 400);
+  }
+  if (!text || typeof text !== "string" || !text.trim()) {
+    throw new AppError("Question text is required", 400);
+  }
+  if (correctAnswer === undefined || correctAnswer === null || correctAnswer === "") {
+    throw new AppError("Correct answer is required", 400);
+  }
+  if (type === "MCQ") {
+    if (!Array.isArray(options) || options.length < 2) {
+      throw new AppError("MCQ questions need at least 2 options", 400);
+    }
+    if (!options.includes(correctAnswer)) {
+      throw new AppError("Correct answer must match one of the options", 400);
+    }
+  }
+  if (type === "MULTI_BLANK_EQUATION" && !Array.isArray(correctAnswer)) {
+    throw new AppError("Multi-blank equation needs an array of answers", 400);
+  }
+}
+
+async function ensureExamOwnership(examId, user) {
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    select: { id: true, createdById: true },
+  });
+  if (!exam) throw new AppError("Exam not found", 404);
+  if (exam.createdById !== user.id && user.role !== "ADMIN") {
+    throw new AppError("You can only modify questions on exams you created", 403);
+  }
+  return exam;
+}
+
 async function addQuestion(req, res, next) {
   try {
     const { examId } = req.params;
     const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
 
-    const exam = await prisma.exam.findUnique({ where: { id: examId } });
-    if (!exam) throw new AppError("Exam not found", 404);
+    await ensureExamOwnership(examId, req.user);
+    validateQuestionPayload({ type, text, correctAnswer, options });
+
+    const parsedMarks = marks != null && marks !== "" ? parseFloat(marks) : 1;
+    if (Number.isNaN(parsedMarks)) {
+      throw new AppError("Marks must be a valid number", 400);
+    }
 
     const question = await prisma.question.create({
       data: {
-        examId, type, text, options, correctAnswer,
-        marks: marks != null ? parseFloat(marks) : 1,
+        examId,
+        type,
+        text,
+        options: options ?? null,
+        correctAnswer,
+        marks: parsedMarks,
         order: order || 0,
-        explanation,
+        explanation: explanation ?? null,
         fillInBlankType: type === "FILL_IN_BLANK" ? (fillInBlankType || "text") : null,
       },
     });
@@ -35,8 +81,19 @@ async function addBulkQuestions(req, res, next) {
     const { examId } = req.params;
     const { questions } = req.body;
 
-    const exam = await prisma.exam.findUnique({ where: { id: examId } });
-    if (!exam) throw new AppError("Exam not found", 404);
+    if (!Array.isArray(questions) || questions.length === 0) {
+      throw new AppError("Provide a non-empty array of questions", 400);
+    }
+
+    await ensureExamOwnership(examId, req.user);
+
+    questions.forEach((q, i) => {
+      try {
+        validateQuestionPayload(q);
+      } catch (e) {
+        throw new AppError(`Question #${i + 1}: ${e.message}`, 400);
+      }
+    });
 
     const created = await prisma.$transaction(
       questions.map((q, i) =>
@@ -45,11 +102,11 @@ async function addBulkQuestions(req, res, next) {
             examId,
             type: q.type,
             text: q.text,
-            options: q.options,
+            options: q.options ?? null,
             correctAnswer: q.correctAnswer,
-            marks: q.marks != null ? parseFloat(q.marks) : 1,
+            marks: q.marks != null && q.marks !== "" ? parseFloat(q.marks) : 1,
             order: q.order ?? i,
-            explanation: q.explanation,
+            explanation: q.explanation ?? null,
             fillInBlankType: q.type === "FILL_IN_BLANK" ? (q.fillInBlankType || "text") : null,
           },
         })
@@ -85,13 +142,19 @@ async function updateQuestion(req, res, next) {
     const existing = await prisma.question.findUnique({ where: { id: req.params.id } });
     if (!existing) throw new AppError("Question not found", 404);
 
+    await ensureExamOwnership(existing.examId, req.user);
+
     const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
     const data = {};
     if (type !== undefined) data.type = type;
     if (text !== undefined) data.text = text;
     if (options !== undefined) data.options = options;
     if (correctAnswer !== undefined) data.correctAnswer = correctAnswer;
-    if (marks !== undefined) data.marks = parseFloat(marks);
+    if (marks !== undefined) {
+      const parsed = parseFloat(marks);
+      if (Number.isNaN(parsed)) throw new AppError("Marks must be a valid number", 400);
+      data.marks = parsed;
+    }
     if (order !== undefined) data.order = order;
     if (explanation !== undefined) data.explanation = explanation;
     if (fillInBlankType !== undefined) data.fillInBlankType = fillInBlankType;
@@ -119,6 +182,8 @@ async function deleteQuestion(req, res, next) {
   try {
     const question = await prisma.question.findUnique({ where: { id: req.params.id } });
     if (!question) throw new AppError("Question not found", 404);
+
+    await ensureExamOwnership(question.examId, req.user);
 
     await prisma.question.delete({ where: { id: req.params.id } });
 

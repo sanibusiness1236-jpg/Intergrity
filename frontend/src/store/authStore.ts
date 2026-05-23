@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import api from "@/lib/api";
+import api, { setAuthTokens, clearAuthTokens } from "@/lib/api";
 import type { User } from "@/types";
 
 interface AuthState {
@@ -22,8 +22,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ isLoading: true });
     try {
       const { data } = await api.post("/auth/login", { email, password });
-      localStorage.setItem("accessToken", data.data.accessToken);
-      localStorage.setItem("refreshToken", data.data.refreshToken);
+      setAuthTokens(data.data.accessToken, data.data.refreshToken);
       set({ user: data.data.user, isAuthenticated: true });
       return data.data.user;
     } finally {
@@ -46,8 +45,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         delete payload.gender;
       }
       const { data } = await api.post("/auth/register", payload);
-      localStorage.setItem("accessToken", data.data.accessToken);
-      localStorage.setItem("refreshToken", data.data.refreshToken);
+      setAuthTokens(data.data.accessToken, data.data.refreshToken);
       set({ user: data.data.user, isAuthenticated: true });
       return data.data.user;
     } finally {
@@ -56,8 +54,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
+    clearAuthTokens();
     set({ user: null, isAuthenticated: false });
   },
 
