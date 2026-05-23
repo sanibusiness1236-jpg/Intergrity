@@ -34,6 +34,7 @@ type SessionWithExam = ExamSession & {
 };
 
 type RowKind = "in_progress" | "available" | "upcoming" | "completed";
+type TabKind = "opened" | "all" | RowKind;
 
 interface ExamRow {
   exam: Exam | SessionWithExam["exam"];
@@ -75,7 +76,7 @@ export default function StudentExamsListPage() {
   const [exams,    setExams]    = useState<Exam[]>([]);
   const [sessions, setSessions] = useState<SessionWithExam[]>([]);
   const [loading,  setLoading]  = useState(true);
-  const [tab, setTab] = useState<"all" | RowKind>("all");
+  const [tab, setTab] = useState<TabKind>("opened");
 
   useEffect(() => {
     if (!user) return;
@@ -185,10 +186,14 @@ export default function StudentExamsListPage() {
   const counts = useMemo(() => {
     const c = { in_progress: 0, available: 0, upcoming: 0, completed: 0 };
     for (const r of rows) c[r.kind]++;
-    return c;
+    return { ...c, opened: c.in_progress + c.available };
   }, [rows]);
 
-  const visible = tab === "all" ? rows : rows.filter((r) => r.kind === tab);
+  const visible = useMemo(() => {
+    if (tab === "all")    return rows;
+    if (tab === "opened") return rows.filter((r) => r.kind === "in_progress" || r.kind === "available");
+    return rows.filter((r) => r.kind === tab);
+  }, [tab, rows]);
 
   return (
     <DashboardShell>
@@ -196,13 +201,15 @@ export default function StudentExamsListPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-3">
             <AnnouncementBadge
-              tag={counts.in_progress > 0 ? "Live" : "Hub"}
+              tag={counts.in_progress > 0 ? "Live" : counts.opened > 0 ? "Open" : "Hub"}
               message={
                 counts.in_progress > 0
                   ? `You have ${counts.in_progress} exam${counts.in_progress > 1 ? "s" : ""} in progress`
+                  : counts.opened > 0
+                  ? `${counts.opened} exam${counts.opened > 1 ? "s are" : " is"} open for you right now`
                   : "All your exam attempts in one place"
               }
-              tone={counts.in_progress > 0 ? "warning" : "default"}
+              tone={counts.in_progress > 0 ? "warning" : counts.opened > 0 ? "success" : "default"}
             />
             <GradientHeading
               title="Exams"
@@ -213,21 +220,29 @@ export default function StudentExamsListPage() {
         </div>
 
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatCard label="In progress"   value={counts.in_progress} accent="amber"   icon={<Icon d="M12 6v6l4 2" />} />
-          <StatCard label="Available now" value={counts.available}   accent="emerald" icon={<Icon d="M5 13l4 4L19 7" />} />
+          <StatCard label="Opened Exams"  value={counts.opened}      accent="emerald" icon={<Icon d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />} />
+          <StatCard label="In Progress"   value={counts.in_progress} accent="amber"   icon={<Icon d="M12 6v6l4 2" />} />
           <StatCard label="Upcoming"      value={counts.upcoming}    accent="indigo"  icon={<Icon d="M8 7V3m8 4V3M3 11h18M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />} />
           <StatCard label="Completed"     value={counts.completed}   accent="purple"  icon={<Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" />} />
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
-          {(["all", "in_progress", "available", "upcoming", "completed"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${tab === t ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"}`}>
-              {t === "all"         ? "All"
-                : t === "in_progress" ? `In Progress (${counts.in_progress})`
-                : t === "available"   ? `Available (${counts.available})`
-                : t === "upcoming"    ? `Upcoming (${counts.upcoming})`
-                : `Completed (${counts.completed})`}
+        {/* Tab bar */}
+        <div className="flex flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
+          {([
+            { id: "opened",      label: `Opened Exams (${counts.opened})`,        highlight: true },
+            { id: "all",         label: "All" },
+            { id: "in_progress", label: `In Progress (${counts.in_progress})` },
+            { id: "upcoming",    label: `Upcoming (${counts.upcoming})` },
+            { id: "completed",   label: `Completed (${counts.completed})` },
+          ] as { id: TabKind; label: string; highlight?: boolean }[]).map(({ id, label, highlight }) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition
+                ${tab === id
+                  ? highlight
+                    ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40"
+                    : "bg-white/10 text-white"
+                  : "text-white/50 hover:bg-white/5 hover:text-white"}`}>
+              {label}
             </button>
           ))}
         </div>
@@ -243,6 +258,8 @@ export default function StudentExamsListPage() {
             <p className="mt-1 text-sm text-white/50">
               {tab === "all"
                 ? "No exams assigned to you. Your examiner will publish them here when ready."
+                : tab === "opened"
+                ? "No exams are open right now. Check back later or ask your examiner to activate an exam."
                 : "No exams match this filter right now."}
             </p>
           </GlowCard>
