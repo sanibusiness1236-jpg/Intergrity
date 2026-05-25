@@ -155,6 +155,99 @@ async function getExam(req, res, next) {
   }
 }
 
+async function saveGeofence(req, res, next) {
+  try {
+    const exam = await prisma.exam.findUnique({ where: { id: req.params.id } });
+    if (!exam) throw new AppError("Exam not found", 404);
+    if (exam.createdById !== req.user.id && req.user.role !== "ADMIN") {
+      throw new AppError("Not authorised", 403);
+    }
+
+    const { geofenceEnabled, geofenceLat, geofenceLng, geofenceRadius } = req.body;
+
+    if (geofenceEnabled && (geofenceLat == null || geofenceLng == null)) {
+      throw new AppError("Latitude and longitude are required when geofence is enabled", 400);
+    }
+
+    const updated = await prisma.exam.update({
+      where: { id: req.params.id },
+      data: {
+        geofenceEnabled: Boolean(geofenceEnabled),
+        geofenceLat: geofenceLat != null ? parseFloat(geofenceLat) : null,
+        geofenceLng: geofenceLng != null ? parseFloat(geofenceLng) : null,
+        geofenceRadius: geofenceRadius != null ? parseFloat(geofenceRadius) : 30,
+      },
+      select: { id: true, geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getGeofence(req, res, next) {
+  try {
+    const exam = await prisma.exam.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, courseCode: true, courseName: true,
+        geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true,
+      },
+    });
+    if (!exam) throw new AppError("Exam not found", 404);
+    res.json({ success: true, data: exam });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function validateGeofence(req, res, next) {
+  try {
+    const exam = await prisma.exam.findUnique({
+      where: { id: req.params.id },
+      select: { geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true },
+    });
+    if (!exam) throw new AppError("Exam not found", 404);
+
+    if (!exam.geofenceEnabled) {
+      return res.json({ success: true, allowed: true, reason: "geofence_disabled" });
+    }
+
+    const { lat, lng } = req.body;
+    if (lat == null || lng == null) {
+      return res.json({ success: true, allowed: false, reason: "no_location" });
+    }
+
+    const distance = haversineMeters(
+      parseFloat(lat), parseFloat(lng),
+      exam.geofenceLat, exam.geofenceLng
+    );
+
+    const allowed = distance <= exam.geofenceRadius;
+    res.json({
+      success: true,
+      allowed,
+      distance: Math.round(distance),
+      radius: exam.geofenceRadius,
+      reason: allowed ? "inside" : "outside",
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 async function updateExam(req, res, next) {
   try {
     const exam = await prisma.exam.findUnique({ where: { id: req.params.id } });
@@ -232,4 +325,4 @@ async function publishExam(req, res, next) {
   }
 }
 
-module.exports = { createExam, getExams, getExam, updateExam, deleteExam, publishExam };
+module.exports = { createExam, getExams, getExam, updateExam, deleteExam, publishExam, saveGeofence, getGeofence, validateGeofence };

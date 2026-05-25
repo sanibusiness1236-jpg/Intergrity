@@ -52,12 +52,46 @@ export default function ExamTakingPage() {
   const answersRef = useRef(answers);
   useEffect(() => { answersRef.current = answers; }, [answers]);
 
+  /* ── geofence ─── */
+  type GeoStatus = "idle" | "checking" | "allowed" | "outside" | "no_permission" | "disabled";
+  const [geoStatus, setGeoStatus] = useState<GeoStatus>("idle");
+
   const sessionId = session?.id || "";
   const allowBacktrack = exam?.allowBacktrack !== false;
   const timeCritical = timeLeft > 0 && timeLeft <= 60;
   const timeWarning = timeLeft > 0 && timeLeft <= 300 && !timeCritical;
 
   useAntiCheat({ sessionId, enabled: phase === "taking" });
+
+  /* ─── Geofence polling (45 s, only while taking) ─ */
+  useEffect(() => {
+    if (phase !== "taking") return;
+    if (!exam?.geofenceEnabled) { setGeoStatus("disabled"); return; }
+
+    function checkLocation() {
+      if (!navigator.geolocation) { setGeoStatus("no_permission"); return; }
+      setGeoStatus("checking");
+      navigator.geolocation.getCurrentPosition(
+        async ({ coords }) => {
+          try {
+            const { data } = await api.post(`/exams/${examId}/geofence/validate`, {
+              lat: coords.latitude,
+              lng: coords.longitude,
+            });
+            setGeoStatus(data.allowed ? "allowed" : "outside");
+          } catch {
+            // network blip — keep last known status, don't block
+          }
+        },
+        () => setGeoStatus("no_permission"),
+        { timeout: 10000, maximumAge: 30000 }
+      );
+    }
+
+    checkLocation(); // immediate first check
+    const id = setInterval(checkLocation, 45_000);
+    return () => clearInterval(id);
+  }, [phase, exam?.geofenceEnabled, examId]);
 
   /* ─── Phase 1: load exam info ─────────────────── */
   useEffect(() => {
@@ -76,6 +110,30 @@ export default function ExamTakingPage() {
   /* ─── Phase 2: start session ──────────────────── */
   async function handleStartExam() {
     setStartError("");
+
+    // Pre-check geofence before starting session
+    if (exam?.geofenceEnabled) {
+      const geoOk = await new Promise<boolean>((resolve) => {
+        if (!navigator.geolocation) { resolve(false); return; }
+        navigator.geolocation.getCurrentPosition(
+          async ({ coords }) => {
+            try {
+              const { data } = await api.post(`/exams/${examId}/geofence/validate`, {
+                lat: coords.latitude, lng: coords.longitude,
+              });
+              resolve(data.allowed);
+            } catch { resolve(true); } // network error → allow to prevent false block
+          },
+          () => resolve(false),
+          { timeout: 10000, maximumAge: 30000 }
+        );
+      });
+      if (!geoOk) {
+        setStartError("You are outside the allowed exam location. Move to the exam venue and try again.");
+        return;
+      }
+    }
+
     setPhase("session-starting");
     try {
       const { data } = await api.post("/sessions/start", {
@@ -372,6 +430,31 @@ export default function ExamTakingPage() {
   /* ═══════════════════════════════════════════════ */
   return (
     <div ref={containerRef} className="flex h-screen flex-col bg-gradient-to-br from-slate-950 via-slate-950 to-indigo-950/20 overflow-hidden">
+
+      {/* ── Geofence block overlay ────────────────── */}
+      {(geoStatus === "outside" || geoStatus === "no_permission") && phase === "taking" && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-amber-500/30 bg-slate-900 p-8 text-center shadow-2xl space-y-4">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30">
+              <Icon d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" size={28} />
+            </div>
+            <h2 className="text-lg font-bold text-amber-300">
+              {geoStatus === "no_permission" ? "Location Access Required" : "Outside Exam Boundary"}
+            </h2>
+            <p className="text-sm text-white/60">
+              {geoStatus === "no_permission"
+                ? "This exam requires location access. Please allow location permission in your browser and try again."
+                : "You are outside the allowed exam location. Please return to the designated exam venue to continue."}
+            </p>
+            <button
+              onClick={() => setGeoStatus("checking")}
+              className="w-full rounded-xl bg-amber-600 py-3 text-sm font-bold text-white transition hover:bg-amber-500"
+            >
+              Check My Location Again
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Fullscreen warning overlay ────────────── */}
       {fsWarning && (

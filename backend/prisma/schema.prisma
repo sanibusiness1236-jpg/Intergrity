@@ -124,6 +124,10 @@ model Exam {
   showRemarksToStudents Boolean  @default(false)
   gradingSystem         Json?
   scoreRemarks          Json?
+  geofenceEnabled       Boolean  @default(false)
+  geofenceLat           Float?
+  geofenceLng           Float?
+  geofenceRadius        Float?   @default(30)
   createdById           String
   createdBy        User       @relation("ExamCreator", fields: [createdById], references: [id])
   institutionId    String

@@ -14,5 +14,8 @@ router.get("/:id", uuidParam(), ctrl.getExam);
 router.put("/:id", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.updateExam);
 router.delete("/:id", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.deleteExam);
 router.patch("/:id/publish", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.publishExam);
+router.put("/:id/geofence", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.saveGeofence);
+router.get("/:id/geofence", uuidParam(), ctrl.getGeofence);
+router.post("/:id/geofence/validate", uuidParam(), ctrl.validateGeofence);
 
 module.exports = router;

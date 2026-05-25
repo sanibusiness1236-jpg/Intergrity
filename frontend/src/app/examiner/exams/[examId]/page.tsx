@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import api from "@/lib/api";
@@ -13,6 +14,9 @@ import {
   QTYPE_ICON,
 } from "@/components/exams/QuestionEditor";
 import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark } from "@/types";
+import type { GeofenceData } from "@/components/exams/GeofenceMap";
+
+const GeofenceMap = dynamic(() => import("@/components/exams/GeofenceMap"), { ssr: false });
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-white/10 text-white/70 border-white/15",
@@ -34,6 +38,7 @@ const TABS = [
   { id: "details", label: "Details", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
   { id: "questions", label: "Questions", icon: "M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" },
   { id: "settings", label: "Settings", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
+  { id: "location", label: "Set Location/Venue Boundary", icon: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "preview", label: "Preview", icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" },
 ];
 
@@ -312,6 +317,9 @@ export default function ExamEditorPage() {
                 pushToast("error", e.response?.data?.error?.message || "Save failed");
               }
             }} />
+          )}
+          {activeTab === "location" && (
+            <GeofenceTab examId={exam.id} exam={exam} pushToast={pushToast} onSaved={loadExam} />
           )}
           {activeTab === "preview" && <PreviewTab exam={exam} questions={questions} />}
         </div>
@@ -1214,6 +1222,103 @@ function ToggleRow({ label, description, value, onChange }: {
       >
         <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${value ? "translate-x-5" : "translate-x-0.5"}`} />
       </button>
+    </div>
+  );
+}
+
+/* ============================================================ */
+/* Geofence / Location Boundary Tab                             */
+/* ============================================================ */
+
+function GeofenceTab({
+  examId, exam, pushToast, onSaved,
+}: {
+  examId: string;
+  exam: Exam;
+  pushToast: (type: "success" | "error" | "info", msg: string) => void;
+  onSaved: () => void;
+}) {
+  const [enabled, setEnabled] = useState<boolean>((exam as any).geofenceEnabled ?? false);
+  const [geo, setGeo] = useState<GeofenceData | null>(
+    (exam as any).geofenceLat != null
+      ? { lat: (exam as any).geofenceLat, lng: (exam as any).geofenceLng, radius: (exam as any).geofenceRadius ?? 30 }
+      : null
+  );
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (enabled && !geo) {
+      pushToast("error", "Please drop a pin on the map before saving.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put(`/exams/${examId}/geofence`, {
+        geofenceEnabled: enabled,
+        geofenceLat: geo?.lat ?? null,
+        geofenceLng: geo?.lng ?? null,
+        geofenceRadius: geo?.radius ?? 30,
+      });
+      pushToast("success", "Location boundary saved.");
+      onSaved();
+    } catch (e: any) {
+      pushToast("error", e.response?.data?.error?.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header card */}
+      <GlowCard
+        title="Set Location / Venue Boundary"
+        description="Restrict exam access to students who are physically within the selected location boundary."
+      >
+        <div className="space-y-4">
+          {/* Enable toggle */}
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <div>
+              <p className="text-sm font-medium text-white">Enable geofencing for this exam</p>
+              <p className="mt-0.5 text-xs text-white/40">
+                When on, students must be inside the drawn boundary to start or continue the exam.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setEnabled((v) => !v)}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                enabled ? "bg-gradient-to-r from-indigo-500 to-purple-500" : "bg-white/10"
+              }`}
+            >
+              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`} />
+            </button>
+          </div>
+
+          {/* Status badge */}
+          {(exam as any).geofenceEnabled && (exam as any).geofenceLat != null && (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              Geofence active · centre {((exam as any).geofenceLat as number).toFixed(5)}, {((exam as any).geofenceLng as number).toFixed(5)} · radius {(exam as any).geofenceRadius} m
+            </div>
+          )}
+        </div>
+      </GlowCard>
+
+      {/* Map (always shown so examiner can adjust before enabling) */}
+      <GlowCard title="Map — Drop a Pin & Draw Boundary" description="Search for a location, click to drop a pin, then set the radius.">
+        <GeofenceMap
+          initial={geo}
+          onChange={(data) => setGeo(data)}
+        />
+      </GlowCard>
+
+      {/* Save */}
+      <div className="flex justify-end">
+        <GlowButton onClick={handleSave} disabled={saving}>
+          {saving ? "Saving…" : "Save location boundary"}
+        </GlowButton>
+      </div>
     </div>
   );
 }
