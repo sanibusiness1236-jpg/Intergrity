@@ -106,15 +106,15 @@ export function ImageBlock({
     if (!["image/jpeg", "image/png"].includes(file.type)) {
       setError("Only JPG or PNG allowed"); return;
     }
-    if (file.size > 1024 * 1024) {
-      setError("Max size is 1 MB"); return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Max size is 5 MB"); return;
     }
     try {
       setUploading(true);
       const { default: compress } = await import("browser-image-compression");
       const compressed = await compress(file, {
-        maxSizeMB: 0.9,
-        maxWidthOrHeight: 1024,
+        maxSizeMB: 4.5,
+        maxWidthOrHeight: 2048,
         useWebWorker: true,
       });
       const form = new FormData();
@@ -160,7 +160,7 @@ export function ImageBlock({
           ) : (
             <>
               <p className="text-sm text-white/70">Click to upload image</p>
-              <p className="text-xs text-white/40">JPG/PNG · max 1 MB · compressed to 1024×1024</p>
+              <p className="text-xs text-white/40">JPG/PNG · max 5 MB · auto-compressed</p>
             </>
           )}
         </div>
@@ -191,8 +191,9 @@ export function AudioBlock({
   async function handleFile(file: File) {
     if (!onChange) return;
     setError("");
-    if (file.type !== "audio/mpeg") { setError("Only MP3 allowed"); return; }
-    if (file.size > 3 * 1024 * 1024) { setError("Max size is 3 MB"); return; }
+    const allowedAudio = ["audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav", "audio/x-m4a"];
+    if (!allowedAudio.includes(file.type)) { setError("Only MP3, M4A, AAC, or WAV allowed"); return; }
+    if (file.size > 10 * 1024 * 1024) { setError("Max size is 10 MB"); return; }
     try {
       setUploading(true);
       const form = new FormData();
@@ -239,7 +240,7 @@ export function AudioBlock({
           ) : (
             <>
               <p className="text-sm text-white/70">Click to upload audio</p>
-              <p className="text-xs text-white/40">MP3 · max 3 MB · max ~90 s</p>
+              <p className="text-xs text-white/40">MP3, M4A, AAC, WAV · max 10 MB</p>
             </>
           )}
         </div>
@@ -247,7 +248,7 @@ export function AudioBlock({
       <input
         ref={inputRef}
         type="file"
-        accept="audio/mpeg"
+        accept="audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-wav,audio/x-m4a,.mp3,.m4a,.aac,.wav"
         className="hidden"
         onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }}
       />

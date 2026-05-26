@@ -7,13 +7,19 @@ const { getSupabaseClient } = require("../../config/supabase");
 
 const MEDIA_BUCKET = "question-media";
 
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"];
+const ALLOWED_AUDIO_TYPES = ["audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav", "audio/x-m4a"];
+const IMAGE_SIZE_LIMIT = 5 * 1024 * 1024;  // 5 MB
+const AUDIO_SIZE_LIMIT = 10 * 1024 * 1024; // 10 MB (generous for WAV/AAC)
+
 const mediaUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 3 * 1024 * 1024 },
+  limits: { fileSize: IMAGE_SIZE_LIMIT },   // multer hard cap; audio checked manually below
   fileFilter(req, file, cb) {
-    const allowed = ["image/jpeg", "image/png", "audio/mpeg"];
-    if (!allowed.includes(file.mimetype)) {
-      return cb(new AppError("Only JPG, PNG, and MP3 files are allowed", 400));
+    const isImage = ALLOWED_IMAGE_TYPES.includes(file.mimetype);
+    const isAudio = ALLOWED_AUDIO_TYPES.includes(file.mimetype);
+    if (!isImage && !isAudio) {
+      return cb(new AppError("Only JPG/PNG images or MP3/M4A/AAC/WAV audio files are allowed", 400));
     }
     cb(null, true);
   },
@@ -31,10 +37,19 @@ async function uploadMedia(req, res, next) {
   try {
     if (!req.file) throw new AppError("No file provided", 400);
 
+    const isAudio = ALLOWED_AUDIO_TYPES.includes(req.file.mimetype);
+    const isImage = ALLOWED_IMAGE_TYPES.includes(req.file.mimetype);
+    if (isImage && req.file.size > IMAGE_SIZE_LIMIT) {
+      throw new AppError("Image must be 5 MB or smaller", 400);
+    }
+    if (isAudio && req.file.size > AUDIO_SIZE_LIMIT) {
+      throw new AppError("Audio file must be 10 MB or smaller", 400);
+    }
+
     const supabase = getSupabaseClient();
     await ensureMediaBucket(supabase);
 
-    const ext = path.extname(req.file.originalname).toLowerCase() || (req.file.mimetype === "audio/mpeg" ? ".mp3" : ".jpg");
+    const ext = path.extname(req.file.originalname).toLowerCase() || (isAudio ? ".mp3" : ".jpg");
     const fileName = `${uuidv4()}${ext}`;
     const folder = req.file.mimetype.startsWith("audio/") ? "audio" : "images";
     const storagePath = `${folder}/${fileName}`;
