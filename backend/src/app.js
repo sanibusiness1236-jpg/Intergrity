@@ -28,25 +28,40 @@ app.use(
     credentials: true,
   })
 );
-app.use(morgan("dev"));
+// Use "combined" in prod (structured) and "dev" locally (colourised)
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+// ── Lightweight cache helper for authenticated GET responses ──
+// Browsers and CDNs will reuse the response for `seconds` without
+// hitting the DB again.  We only do this on safe, idempotent endpoints.
+function cacheFor(seconds) {
+  return (_req, res, next) => {
+    res.set("Cache-Control", `private, max-age=${seconds}, stale-while-revalidate=${seconds * 2}`);
+    next();
+  };
+}
+
 app.get("/health", (_req, res) => {
-  res.json({ status: "healthy", service: "INTEGRITY Backend" });
+  res.set("Cache-Control", "no-store");
+  res.json({ status: "healthy", service: "INTEGRITY Backend", ts: Date.now() });
 });
 
 app.use("/api/auth", authRoutes);
-app.use("/api/institutions", institutionRoutes);
-app.use("/api/exams", examRoutes);
+// Institution brand rarely changes — cache 60 s in the browser
+app.use("/api/institutions", cacheFor(60), institutionRoutes);
+// Exam list: 10 s cache so dashboards feel instant on re-visit
+app.use("/api/exams", cacheFor(10), examRoutes);
 app.use("/api/questions", questionRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/invigilator", invigilatorRoutes);
 app.use("/api/integrity", integrityRoutes);
-app.use("/api/analytics", analyticsRoutes);
+// Analytics are heavy queries — 30 s cache
+app.use("/api/analytics", cacheFor(30), analyticsRoutes);
 app.use("/api/students", studentRoutes);
-app.use("/api/users", userRoutes);
+app.use("/api/users", cacheFor(30), userRoutes);
 app.use("/api/ai-import", aiImportRoutes);
 
 app.use(errorHandler);

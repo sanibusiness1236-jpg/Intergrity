@@ -38,6 +38,8 @@ export default function ExaminerDashboard() {
   const [exams, setExams] = useState<ExamRow[]>([]);
 
   useEffect(() => {
+    // Pre-warm the backend to avoid cold-start delays on subsequent calls
+    api.get("/health").catch(() => {});
     api.get("/exams").then(({ data }) => setExams(data.data || [])).catch(() => {});
   }, []);
 

@@ -41,17 +41,23 @@ export default function StudentDashboard() {
   const { user } = useAuthStore();
   const [sessions, setSessions] = useState<(ExamSession & { exam: any })[]>([]);
   const [availableExams, setAvailableExams] = useState<Exam[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
-    api.get(`/students/${user.id}/exams`).then(({ data }) => {
-      setSessions(data.data || []);
-    }).catch(() => {});
 
-    api.get("/exams").then(({ data }) => {
-      const all: Exam[] = data.data || [];
-      setAvailableExams(all.filter(isAvailableNow));
-    }).catch(() => {});
+    // Pre-warm the backend so subsequent API calls don't hit a cold start
+    api.get("/health").catch(() => {});
+
+    Promise.all([
+      api.get(`/students/${user.id}/exams`).then(({ data }) => {
+        setSessions(data.data || []);
+      }).catch(() => {}),
+      api.get("/exams").then(({ data }) => {
+        const all: Exam[] = data.data || [];
+        setAvailableExams(all.filter(isAvailableNow));
+      }).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, [user]);
 
   const total = sessions.length;
@@ -70,6 +76,25 @@ export default function StudentDashboard() {
     () => availableExams.filter((e) => !startedExamIds.has(e.id)),
     [availableExams, startedExamIds]
   );
+
+  if (loading) {
+    return (
+      <DashboardShell>
+        <div className="flex flex-col gap-4 animate-pulse">
+          {/* hero skeleton */}
+          <div className="min-h-[280px] rounded-3xl bg-white/5" />
+          {/* stat cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-24 rounded-2xl bg-white/5" />
+            ))}
+          </div>
+          {/* table rows */}
+          <div className="rounded-2xl bg-white/5 h-64" />
+        </div>
+      </DashboardShell>
+    );
+  }
 
   return (
     <DashboardShell>
