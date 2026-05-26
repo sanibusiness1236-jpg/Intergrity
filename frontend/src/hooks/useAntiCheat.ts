@@ -47,35 +47,79 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     const socket = getSocket();
     socket.emit("presence:join", { sessionId });
 
-    /* ── 1. TAB SWITCH (with duration in seconds) ─────────────── */
-    let hiddenAt: number | null = null;
+    /* ── 1 & 2. UNIFIED TIME-AWAY TRACKER ─────────────────────────
+     *
+     * Single "isAway" guard prevents duplicate counting when multiple
+     * events fire at the same time (e.g. visibilitychange + blur both fire
+     * when the student switches to another app on some browsers).
+     *
+     * Flow:
+     *   departure  → markAway()   — sets isAway=true, records timestamp
+     *   return     → markReturn() — calculates elapsed seconds, emits flag
+     *
+     * visibilitychange (hidden/visible) handles tab switches.
+     * window blur/focus handles window minimize / alt-tab to another app.
+     * Both call the same helpers; the isAway flag ensures only one
+     * departure is counted per physical "leave" event.
+     * ──────────────────────────────────────────────────────────── */
+    let isAway = false;
+    let awayStart: number | null = null;
+    // "tab" = visibilitychange triggered; "blur" = window.blur triggered
+    let awaySource: "tab" | "blur" = "tab";
 
+    function markAway(source: "tab" | "blur") {
+      if (isAway) return;          // already counting — ignore duplicate event
+      isAway = true;
+      awayStart = Date.now();
+      awaySource = source;
+    }
+
+    function markReturn() {
+      if (!isAway) return;         // not currently away — spurious focus/show event
+      const seconds =
+        awayStart !== null
+          ? Math.max(1, Math.round((Date.now() - awayStart) / 1000))
+          : 1;
+      isAway = false;
+      awayStart = null;
+      flagCountRef.current.tab_switch++;
+      reportFlag("TAB_SWITCH", {
+        count: flagCountRef.current.tab_switch,
+        seconds,
+        source: awaySource,          // "tab" or "blur" for server-side analysis
+        returned_at: new Date().toISOString(),
+      });
+    }
+
+    // document.visibilitychange — fires when the tab is hidden/shown
+    // (switching tabs, opening a new tab, phone lock screen, etc.)
     function onVisibilityChange() {
       if (document.hidden) {
-        hiddenAt = Date.now();
-      } else if (hiddenAt !== null) {
-        const seconds = Math.max(1, Math.round((Date.now() - hiddenAt) / 1000));
-        hiddenAt = null;
-        flagCountRef.current.tab_switch++;
-        reportFlag("TAB_SWITCH", {
-          count: flagCountRef.current.tab_switch,
-          seconds,
-          returned_at: new Date().toISOString(),
-        });
+        markAway("tab");
+      } else {
+        markReturn();
       }
     }
 
-    /* ── 2. WINDOW MINIMIZE / ALT-TAB ─────────────────────────── */
-    // window.blur fires even while the tab is still "visible" (e.g. alt-tab
-    // to another app or minimise). We only report if the tab is NOT hidden
-    // (otherwise visibilitychange already handles it).
+    // window.blur — fires when the WINDOW loses focus while the tab itself
+    // may still be "visible" (minimize, alt-tab to another app).
+    // We emit a WINDOW_BLUR flag ONLY when visibilitychange has NOT already
+    // started the away timer (i.e. !isAway at the moment blur fires).
+    // Then we always call markAway so the time is still accumulated.
     function onWindowBlur() {
-      if (document.hidden) return;        // already covered by TAB_SWITCH
-      flagCountRef.current.blur++;
-      reportFlag("WINDOW_BLUR", {
-        count: flagCountRef.current.blur,
-        reason: "window_lost_focus",
-      });
+      if (!isAway) {
+        flagCountRef.current.blur++;
+        reportFlag("WINDOW_BLUR", {
+          count: flagCountRef.current.blur,
+          reason: "window_lost_focus",
+        });
+      }
+      markAway("blur");   // no-op if visibilitychange already set isAway=true
+    }
+
+    // window.focus — fires when the window regains focus (un-minimize, click back)
+    function onWindowFocus() {
+      markReturn();        // no-op if visibilitychange already cleared isAway
     }
 
     /* ── 3. PASTE ─────────────────────────────────────────────── */
@@ -198,6 +242,7 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     /* ── Mount listeners ──────────────────────────────────────── */
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("focus", onWindowFocus);
     document.addEventListener("paste", onPaste);
     document.addEventListener("contextmenu", onContextMenu);
 
@@ -205,6 +250,7 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("focus", onWindowFocus);
       document.removeEventListener("paste", onPaste);
       document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("gamepadconnected", onGamepadConnected);
