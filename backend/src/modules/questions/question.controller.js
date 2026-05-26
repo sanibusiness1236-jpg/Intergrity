@@ -1,5 +1,62 @@
+const path = require("path");
+const { v4: uuidv4 } = require("uuid");
+const multer = require("multer");
 const prisma = require("../../config/db");
 const { AppError } = require("../../middleware/errorHandler");
+const { getSupabaseClient } = require("../../config/supabase");
+
+const MEDIA_BUCKET = "question-media";
+
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    const allowed = ["image/jpeg", "image/png", "audio/mpeg"];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new AppError("Only JPG, PNG, and MP3 files are allowed", 400));
+    }
+    cb(null, true);
+  },
+});
+
+async function ensureMediaBucket(supabase) {
+  const { data: buckets } = await supabase.storage.listBuckets();
+  const exists = buckets?.some((b) => b.name === MEDIA_BUCKET);
+  if (!exists) {
+    await supabase.storage.createBucket(MEDIA_BUCKET, { public: true });
+  }
+}
+
+async function uploadMedia(req, res, next) {
+  try {
+    if (!req.file) throw new AppError("No file provided", 400);
+
+    const supabase = getSupabaseClient();
+    await ensureMediaBucket(supabase);
+
+    const ext = path.extname(req.file.originalname).toLowerCase() || (req.file.mimetype === "audio/mpeg" ? ".mp3" : ".jpg");
+    const fileName = `${uuidv4()}${ext}`;
+    const folder = req.file.mimetype.startsWith("audio/") ? "audio" : "images";
+    const storagePath = `${folder}/${fileName}`;
+
+    const { error } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .upload(storagePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false,
+      });
+
+    if (error) throw new AppError(`Storage upload failed: ${error.message}`, 500);
+
+    const { data: { publicUrl } } = supabase.storage
+      .from(MEDIA_BUCKET)
+      .getPublicUrl(storagePath);
+
+    res.json({ success: true, url: publicUrl });
+  } catch (err) {
+    next(err);
+  }
+}
 
 const VALID_TYPES = ["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION"];
 
@@ -41,10 +98,17 @@ async function ensureExamOwnership(examId, user) {
 async function addQuestion(req, res, next) {
   try {
     const { examId } = req.params;
-    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
+    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType, blocks } = req.body;
 
     await ensureExamOwnership(examId, req.user);
-    validateQuestionPayload({ type, text, correctAnswer, options });
+
+    // For block-based questions, text is optional (summary derived from blocks)
+    const isBlockBased = Array.isArray(blocks) && blocks.length > 0;
+    if (!isBlockBased) {
+      validateQuestionPayload({ type, text, correctAnswer, options });
+    } else if (!type || !VALID_TYPES.includes(type)) {
+      throw new AppError(`Invalid question type. Must be one of: ${VALID_TYPES.join(", ")}`, 400);
+    }
 
     const parsedMarks = marks != null && marks !== "" ? parseFloat(marks) : 1;
     if (Number.isNaN(parsedMarks)) {
@@ -55,13 +119,14 @@ async function addQuestion(req, res, next) {
       data: {
         examId,
         type,
-        text,
+        text: text || (isBlockBased ? "[block-based question]" : ""),
         options: options ?? null,
-        correctAnswer,
+        correctAnswer: correctAnswer ?? (isBlockBased ? "" : undefined),
         marks: parsedMarks,
         order: order || 0,
         explanation: explanation ?? null,
         fillInBlankType: type === "FILL_IN_BLANK" ? (fillInBlankType || "text") : null,
+        blocks: isBlockBased ? blocks : null,
       },
     });
 
@@ -144,7 +209,7 @@ async function updateQuestion(req, res, next) {
 
     await ensureExamOwnership(existing.examId, req.user);
 
-    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType } = req.body;
+    const { type, text, options, correctAnswer, marks, order, explanation, fillInBlankType, blocks } = req.body;
     const data = {};
     if (type !== undefined) data.type = type;
     if (text !== undefined) data.text = text;
@@ -158,6 +223,7 @@ async function updateQuestion(req, res, next) {
     if (order !== undefined) data.order = order;
     if (explanation !== undefined) data.explanation = explanation;
     if (fillInBlankType !== undefined) data.fillInBlankType = fillInBlankType;
+    if (blocks !== undefined) data.blocks = Array.isArray(blocks) && blocks.length > 0 ? blocks : null;
 
     const question = await prisma.question.update({
       where: { id: req.params.id },
@@ -198,4 +264,4 @@ async function deleteQuestion(req, res, next) {
   }
 }
 
-module.exports = { addQuestion, addBulkQuestions, getQuestions, updateQuestion, deleteQuestion };
+module.exports = { addQuestion, addBulkQuestions, getQuestions, updateQuestion, deleteQuestion, uploadMedia, mediaUpload };

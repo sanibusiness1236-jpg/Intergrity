@@ -7,6 +7,7 @@ const router = Router();
 
 router.use(authenticate);
 
+router.post("/upload-media", authorize("EXAMINER", "ADMIN"), ctrl.mediaUpload.single("file"), ctrl.uploadMedia);
 router.post("/exam/:examId", authorize("EXAMINER", "ADMIN"), ctrl.addQuestion);
 router.post("/exam/:examId/bulk", authorize("EXAMINER", "ADMIN"), ctrl.addBulkQuestions);
 router.get("/exam/:examId", ctrl.getQuestions);

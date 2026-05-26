@@ -157,6 +157,7 @@ model Question {
   fillInBlankType String?
   order        Int          @default(0)
   explanation  String?
+  blocks       Json?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
