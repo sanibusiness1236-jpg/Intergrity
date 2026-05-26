@@ -155,6 +155,56 @@ async function getExam(req, res, next) {
   }
 }
 
+/**
+ * Normalise a single zone object. Returns null if invalid.
+ */
+function normaliseZone(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const lat = parseFloat(raw.lat);
+  const lng = parseFloat(raw.lng);
+  const radius = parseFloat(raw.radius);
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  return {
+    name: typeof raw.name === "string" ? raw.name.trim() || null : null,
+    lat,
+    lng,
+    radius: Number.isNaN(radius) || radius < 5 ? 30 : radius,
+  };
+}
+
+/**
+ * Build the canonical zones array from whatever the client sent
+ * (preferred: `zones`; legacy: single `geofenceLat/Lng/Radius`).
+ */
+function buildZonesFromRequest(body) {
+  if (Array.isArray(body.zones)) {
+    return body.zones.map(normaliseZone).filter(Boolean);
+  }
+  const single = normaliseZone({
+    lat: body.geofenceLat,
+    lng: body.geofenceLng,
+    radius: body.geofenceRadius,
+  });
+  return single ? [single] : [];
+}
+
+/**
+ * Read zones from a stored exam row. Prefers the new `geofenceZones`
+ * JSON column; falls back to the legacy single-zone columns so existing
+ * exams keep working.
+ */
+function readZonesFromExam(exam) {
+  if (Array.isArray(exam.geofenceZones) && exam.geofenceZones.length > 0) {
+    return exam.geofenceZones.map(normaliseZone).filter(Boolean);
+  }
+  const legacy = normaliseZone({
+    lat: exam.geofenceLat,
+    lng: exam.geofenceLng,
+    radius: exam.geofenceRadius,
+  });
+  return legacy ? [legacy] : [];
+}
+
 async function saveGeofence(req, res, next) {
   try {
     const exam = await prisma.exam.findUnique({ where: { id: req.params.id } });
@@ -163,21 +213,31 @@ async function saveGeofence(req, res, next) {
       throw new AppError("Not authorised", 403);
     }
 
-    const { geofenceEnabled, geofenceLat, geofenceLng, geofenceRadius } = req.body;
+    const { geofenceEnabled } = req.body;
+    const zones = buildZonesFromRequest(req.body);
 
-    if (geofenceEnabled && (geofenceLat == null || geofenceLng == null)) {
-      throw new AppError("Latitude and longitude are required when geofence is enabled", 400);
+    if (geofenceEnabled && zones.length === 0) {
+      throw new AppError("At least one location boundary is required when geofence is enabled", 400);
     }
+
+    // Mirror the first zone into the legacy single-zone columns so older
+    // clients / queries that read them keep working.
+    const primary = zones[0] || null;
 
     const updated = await prisma.exam.update({
       where: { id: req.params.id },
       data: {
         geofenceEnabled: Boolean(geofenceEnabled),
-        geofenceLat: geofenceLat != null ? parseFloat(geofenceLat) : null,
-        geofenceLng: geofenceLng != null ? parseFloat(geofenceLng) : null,
-        geofenceRadius: geofenceRadius != null ? parseFloat(geofenceRadius) : 30,
+        geofenceLat: primary ? primary.lat : null,
+        geofenceLng: primary ? primary.lng : null,
+        geofenceRadius: primary ? primary.radius : 30,
+        geofenceZones: zones.length > 0 ? zones : null,
       },
-      select: { id: true, geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true },
+      select: {
+        id: true, geofenceEnabled: true,
+        geofenceLat: true, geofenceLng: true, geofenceRadius: true,
+        geofenceZones: true,
+      },
     });
 
     res.json({ success: true, data: updated });
@@ -192,11 +252,16 @@ async function getGeofence(req, res, next) {
       where: { id: req.params.id },
       select: {
         id: true, courseCode: true, courseName: true,
-        geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true,
+        geofenceEnabled: true,
+        geofenceLat: true, geofenceLng: true, geofenceRadius: true,
+        geofenceZones: true,
       },
     });
     if (!exam) throw new AppError("Exam not found", 404);
-    res.json({ success: true, data: exam });
+    res.json({
+      success: true,
+      data: { ...exam, zones: readZonesFromExam(exam) },
+    });
   } catch (err) {
     next(err);
   }
@@ -206,7 +271,11 @@ async function validateGeofence(req, res, next) {
   try {
     const exam = await prisma.exam.findUnique({
       where: { id: req.params.id },
-      select: { geofenceEnabled: true, geofenceLat: true, geofenceLng: true, geofenceRadius: true },
+      select: {
+        geofenceEnabled: true,
+        geofenceLat: true, geofenceLng: true, geofenceRadius: true,
+        geofenceZones: true,
+      },
     });
     if (!exam) throw new AppError("Exam not found", 404);
 
@@ -219,18 +288,41 @@ async function validateGeofence(req, res, next) {
       return res.json({ success: true, allowed: false, reason: "no_location" });
     }
 
-    const distance = haversineMeters(
-      parseFloat(lat), parseFloat(lng),
-      exam.geofenceLat, exam.geofenceLng
-    );
+    const zones = readZonesFromExam(exam);
+    if (zones.length === 0) {
+      return res.json({ success: true, allowed: true, reason: "no_zones_configured" });
+    }
 
-    const allowed = distance <= exam.geofenceRadius;
-    res.json({
+    const studentLat = parseFloat(lat);
+    const studentLng = parseFloat(lng);
+
+    let best = null;
+    for (const z of zones) {
+      const distance = haversineMeters(studentLat, studentLng, z.lat, z.lng);
+      if (best === null || distance < best.distance) {
+        best = { zone: z, distance };
+      }
+      if (distance <= z.radius) {
+        return res.json({
+          success: true,
+          allowed: true,
+          reason: "inside",
+          matchedZone: z.name || null,
+          distance: Math.round(distance),
+          radius: z.radius,
+          zoneCount: zones.length,
+        });
+      }
+    }
+
+    return res.json({
       success: true,
-      allowed,
-      distance: Math.round(distance),
-      radius: exam.geofenceRadius,
-      reason: allowed ? "inside" : "outside",
+      allowed: false,
+      reason: "outside",
+      distance: best ? Math.round(best.distance) : null,
+      radius: best ? best.zone.radius : null,
+      nearestZone: best ? (best.zone.name || null) : null,
+      zoneCount: zones.length,
     });
   } catch (err) {
     next(err);

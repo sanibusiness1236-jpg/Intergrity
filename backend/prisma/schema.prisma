@@ -129,6 +129,7 @@ model Exam {
   geofenceLat           Float?
   geofenceLng           Float?
   geofenceRadius        Float?   @default(30)
+  geofenceZones         Json?
   createdById           String
   createdBy        User       @relation("ExamCreator", fields: [createdById], references: [id])
   institutionId    String

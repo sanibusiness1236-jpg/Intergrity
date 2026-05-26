@@ -15,7 +15,7 @@ import {
 } from "@/components/exams/QuestionEditor";
 import { BlockList } from "@/components/exams/blocks";
 import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark } from "@/types";
-import type { GeofenceData } from "@/components/exams/GeofenceMap";
+import type { GeofenceData, GeofenceZone } from "@/components/exams/GeofenceMap";
 
 const GeofenceMap = dynamic(() => import("@/components/exams/GeofenceMap"), { ssr: false });
 
@@ -1612,29 +1612,60 @@ function GeofenceTab({
   pushToast: (type: "success" | "error" | "info", msg: string) => void;
   onSaved: () => void;
 }) {
-  const [enabled, setEnabled] = useState<boolean>((exam as any).geofenceEnabled ?? false);
-  const [geo, setGeo] = useState<GeofenceData | null>(
-    (exam as any).geofenceLat != null
-      ? { lat: (exam as any).geofenceLat, lng: (exam as any).geofenceLng, radius: (exam as any).geofenceRadius ?? 30 }
-      : null
-  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const examAny = exam as any;
+  const [enabled, setEnabled] = useState<boolean>(examAny.geofenceEnabled ?? false);
+
+  // Seed zones from the new geofenceZones JSON column or fall back to the
+  // legacy single-zone columns so old exams keep working.
+  const seedZones: GeofenceZone[] = (() => {
+    if (Array.isArray(examAny.geofenceZones) && examAny.geofenceZones.length > 0) {
+      return examAny.geofenceZones.map((z: GeofenceData & { name?: string }, i: number) => ({
+        id: `seed-${i}`,
+        name: z.name,
+        lat: z.lat,
+        lng: z.lng,
+        radius: z.radius ?? 30,
+      }));
+    }
+    if (examAny.geofenceLat != null) {
+      return [{
+        id: "seed-0",
+        name: "Zone 1",
+        lat: examAny.geofenceLat,
+        lng: examAny.geofenceLng,
+        radius: examAny.geofenceRadius ?? 30,
+      }];
+    }
+    return [];
+  })();
+
+  const [zones, setZones] = useState<GeofenceZone[]>(seedZones);
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
-    if (enabled && !geo) {
-      pushToast("error", "Please drop a pin on the map before saving.");
+    if (enabled && zones.length === 0) {
+      pushToast("error", "Please drop at least one pin on the map before saving.");
       return;
     }
     setSaving(true);
     try {
+      const cleanZones = zones.map((z, i) => ({
+        name: z.name?.trim() || `Zone ${i + 1}`,
+        lat: z.lat,
+        lng: z.lng,
+        radius: z.radius,
+      }));
       await api.put(`/exams/${examId}/geofence`, {
         geofenceEnabled: enabled,
-        geofenceLat: geo?.lat ?? null,
-        geofenceLng: geo?.lng ?? null,
-        geofenceRadius: geo?.radius ?? 30,
+        zones: cleanZones,
       });
-      pushToast("success", "Location boundary saved.");
+      pushToast(
+        "success",
+        `Saved ${cleanZones.length} location boundar${cleanZones.length === 1 ? "y" : "ies"}.`
+      );
       onSaved();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Save failed");
     } finally {
@@ -1642,12 +1673,16 @@ function GeofenceTab({
     }
   }
 
+  const savedZoneCount = Array.isArray(examAny.geofenceZones)
+    ? examAny.geofenceZones.length
+    : (examAny.geofenceLat != null ? 1 : 0);
+
   return (
     <div className="space-y-6">
       {/* Header card */}
       <GlowCard
         title="Set Location / Venue Boundary"
-        description="Restrict exam access to students who are physically within the selected location boundary."
+        description="Restrict exam access to students who are physically within one of the configured location boundaries. Add multiple zones if the exam is held in different buildings or venues."
       >
         <div className="space-y-4">
           {/* Enable toggle */}
@@ -1655,7 +1690,8 @@ function GeofenceTab({
             <div>
               <p className="text-sm font-medium text-white">Enable geofencing for this exam</p>
               <p className="mt-0.5 text-xs text-white/40">
-                When on, students must be inside the drawn boundary to start or continue the exam.
+                When on, students must be inside <strong>any one</strong> of the configured zones
+                to start or continue the exam.
               </p>
             </div>
             <button
@@ -1670,27 +1706,30 @@ function GeofenceTab({
           </div>
 
           {/* Status badge */}
-          {(exam as any).geofenceEnabled && (exam as any).geofenceLat != null && (
+          {examAny.geofenceEnabled && savedZoneCount > 0 && (
             <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
               <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              Geofence active · centre {((exam as any).geofenceLat as number).toFixed(5)}, {((exam as any).geofenceLng as number).toFixed(5)} · radius {(exam as any).geofenceRadius} m
+              Geofence active · {savedZoneCount} zone{savedZoneCount === 1 ? "" : "s"} configured
             </div>
           )}
         </div>
       </GlowCard>
 
-      {/* Map (always shown so examiner can adjust before enabling) */}
-      <GlowCard title="Map — Drop a Pin & Draw Boundary" description="Search for a location, click to drop a pin, then set the radius.">
+      {/* Map */}
+      <GlowCard
+        title="Map — Drop Pins & Draw Boundaries"
+        description="Search for a location, click the map to drop a pin, drag the coloured handle to resize. Use “Add another zone” for additional buildings."
+      >
         <GeofenceMap
-          initial={geo}
-          onChange={(data) => setGeo(data)}
+          initialZones={seedZones}
+          onZonesChange={setZones}
         />
       </GlowCard>
 
       {/* Save */}
       <div className="flex justify-end">
         <GlowButton onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : "Save location boundary"}
+          {saving ? "Saving…" : `Save ${zones.length} location boundar${zones.length === 1 ? "y" : "ies"}`}
         </GlowButton>
       </div>
     </div>
