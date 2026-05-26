@@ -7,6 +7,19 @@ const { AppError } = require("../../middleware/errorHandler");
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
+function mlError(err) {
+  if (err.code === "ECONNRESET" || err.code === "ECONNABORTED" || err.message?.includes("socket hang up")) {
+    return new AppError("ML service is starting up — please wait 30 seconds and try again.", 503);
+  }
+  if (err.code === "ECONNREFUSED") {
+    return new AppError("ML service is offline. Check the Hugging Face Space is running.", 503);
+  }
+  if (err.response) {
+    return new AppError(err.response.data?.detail || "ML service error", err.response.status || 502);
+  }
+  return err;
+}
+
 // ─── Multer — store uploads in /tmp ───────────────────────────────────────────
 const upload = multer({
   dest: path.join(process.cwd(), "tmp_uploads"),
@@ -107,9 +120,10 @@ async function uploadAndExtract(req, res, next) {
           },
         });
       } catch (err) {
+        const friendly = mlError(err);
         await prisma.aIImportJob.update({
           where: { id: job.id },
-          data: { status: "error", errorMsg: err.message || "Processing failed" },
+          data: { status: "error", errorMsg: friendly.message || err.message || "Processing failed" },
         }).catch(() => {});
       } finally {
         // Clean up temp file
@@ -153,12 +167,16 @@ async function regenerateQuestion(req, res, next) {
     const { question_text, question_type, options, mode } = req.body;
     if (!question_text) throw new AppError("question_text is required", 400);
 
-    const mlResp = await axios.post(
-      `${ML_SERVICE_URL}/ai/regenerate-question`,
-      { question_text, question_type: question_type || "theory", options: options || [], mode: mode || "similar" },
-      { timeout: 60_000 }
-    );
-    res.json({ success: true, data: mlResp.data });
+    try {
+      const mlResp = await axios.post(
+        `${ML_SERVICE_URL}/ai/regenerate-question`,
+        { question_text, question_type: question_type || "theory", options: options || [], mode: mode || "similar" },
+        { timeout: 90_000 }
+      );
+      res.json({ success: true, data: mlResp.data });
+    } catch (err) {
+      next(mlError(err));
+    }
   } catch (err) {
     next(err);
   }

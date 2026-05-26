@@ -3,7 +3,26 @@ const prisma = require("../../config/db");
 const { mlServiceUrl } = require("../../config/env");
 const { AppError } = require("../../middleware/errorHandler");
 
-const mlClient = axios.create({ baseURL: mlServiceUrl, timeout: 60000 });
+// 3-minute timeout — HF Spaces can take 60-90 s to cold-start
+const mlClient = axios.create({ baseURL: mlServiceUrl, timeout: 180_000 });
+
+// Friendly helper so every ML call returns a readable error instead of hanging
+async function safeMlCall(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err.code === "ECONNRESET" || err.code === "ECONNABORTED" || err.message?.includes("socket hang up")) {
+      throw new AppError("ML service is starting up — please wait 30 seconds and try again.", 503);
+    }
+    if (err.code === "ECONNREFUSED") {
+      throw new AppError("ML service is offline. Check the Hugging Face Space is running.", 503);
+    }
+    if (err.response) {
+      throw new AppError(err.response.data?.detail || err.response.data?.message || "ML service error", err.response.status || 502);
+    }
+    throw err;
+  }
+}
 
 async function predictVenue(req, res, next) {
   try {
@@ -46,11 +65,11 @@ async function predictVenue(req, res, next) {
       };
     });
 
-    const mlResponse = await mlClient.post("/predict", {
+    const mlResponse = await safeMlCall(() => mlClient.post("/predict", {
       venue_id: venueId,
       exam_id: examId,
       students,
-    });
+    }));
 
     const predictions = mlResponse.data.predictions || [];
     await prisma.$transaction(
@@ -70,54 +89,45 @@ async function predictVenue(req, res, next) {
 
     res.json({ success: true, data: mlResponse.data });
   } catch (err) {
-    if (err.response) {
-      return next(new AppError(`ML service error: ${err.response.data.detail || err.message}`, 502));
-    }
     next(err);
   }
 }
 
 async function getModels(_req, res, next) {
   try {
-    const response = await mlClient.get("/models/");
+    const response = await safeMlCall(() => mlClient.get("/models/"));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
 async function switchModel(req, res, next) {
   try {
     const { model } = req.body;
-    const response = await mlClient.post("/models/switch", { model });
+    const response = await safeMlCall(() => mlClient.post("/models/switch", { model }));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    if (err.response) {
-      return next(new AppError(err.response.data.detail || "Switch failed", 400));
-    }
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
 async function evaluateModel(req, res, next) {
   try {
     const { modelName } = req.params;
-    const response = await mlClient.get(`/evaluate/${modelName}`, { params: req.query });
+    const response = await safeMlCall(() => mlClient.get(`/evaluate/${modelName}`, { params: req.query }));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    if (err.response) {
-      return next(new AppError(err.response.data.detail || "Evaluation failed", err.response.status));
-    }
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
 async function evaluateAll(req, res, next) {
   try {
-    const response = await mlClient.get("/evaluate/all", { params: req.query });
+    const response = await safeMlCall(() => mlClient.get("/evaluate/all", { params: req.query }));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
@@ -139,10 +149,10 @@ async function getPredictions(req, res, next) {
 
 async function listDatasets(_req, res, next) {
   try {
-    const response = await mlClient.get("/datasets");
+    const response = await safeMlCall(() => mlClient.get("/datasets"));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
@@ -151,22 +161,18 @@ async function importDataset(req, res, next) {
     if (req.file) {
       const csv = req.file.buffer.toString("utf-8");
       const name = req.body.name || req.file.originalname || "imported_dataset";
-      const response = await mlClient.post("/datasets/import/csv-text", { name, csv });
+      const response = await safeMlCall(() => mlClient.post("/datasets/import/csv-text", { name, csv }));
       return res.json({ success: true, data: response.data });
     }
     if (req.body.students) {
-      const response = await mlClient.post("/datasets/import/json", {
+      const response = await safeMlCall(() => mlClient.post("/datasets/import/json", {
         name: req.body.name || "imported_dataset",
         students: req.body.students,
-      });
+      }));
       return res.json({ success: true, data: response.data });
     }
     throw new AppError("Upload a CSV file or send JSON with students array", 400);
   } catch (err) {
-    if (err instanceof AppError) return next(err);
-    if (err.response) {
-      return next(new AppError(err.response.data.detail || "Import failed", err.response.status || 400));
-    }
     next(err);
   }
 }
@@ -174,30 +180,24 @@ async function importDataset(req, res, next) {
 async function predictDataset(req, res, next) {
   try {
     const { datasetId } = req.params;
-    const response = await mlClient.post(`/datasets/${datasetId}/predict`);
+    const response = await safeMlCall(() => mlClient.post(`/datasets/${datasetId}/predict`));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    if (err.response) {
-      return next(new AppError(err.response.data.detail || "Prediction failed", err.response.status || 502));
-    }
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
 async function trainDataset(req, res, next) {
   try {
     const { datasetId } = req.params;
-    const response = await mlClient.post(
+    const response = await safeMlCall(() => mlClient.post(
       `/datasets/${datasetId}/train`,
       {},
       { params: { epochs: req.body.epochs, model: req.body.model } },
-    );
+    ));
     res.json({ success: true, data: response.data });
   } catch (err) {
-    if (err.response) {
-      return next(new AppError(err.response.data.detail || "Training failed", err.response.status || 400));
-    }
-    next(new AppError("ML service unavailable", 502));
+    next(err);
   }
 }
 
