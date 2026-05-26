@@ -50,6 +50,12 @@ export default function ExamTakingPage() {
   const [reportError, setReportError] = useState("");
   const [reportedQuestionIds, setReportedQuestionIds] = useState<Set<string>>(new Set());
 
+  /* ── USB advisory ─── */
+  const [usbModalOpen, setUsbModalOpen] = useState(false);
+  const [usbConfirmed, setUsbConfirmed] = useState(false);
+  // Devices found at scan time that are not the obvious built-in default
+  const [usbFoundDevices, setUsbFoundDevices] = useState<{ name: string; type: string }[]>([]);
+
   /* ── fullscreen ─── */
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsWarning, setFsWarning] = useState(false);
@@ -101,6 +107,24 @@ export default function ExamTakingPage() {
     const id = setInterval(checkLocation, 45_000);
     return () => clearInterval(id);
   }, [phase, exam?.geofenceEnabled, examId]);
+
+  /* ─── USB baseline scan (runs once when exam info is loaded) ── */
+  // Enumerate connected devices so we can show an advisory before the exam
+  // starts. Devices with deviceId === "default" or empty labels are almost
+  // always built-in; everything else is treated as a potential external device.
+  useEffect(() => {
+    if (phase !== "ready" && phase !== "password") return;
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    navigator.mediaDevices.enumerateDevices().then((devs) => {
+      const external = devs
+        .filter((d) => d.deviceId && d.deviceId !== "default" && d.label)
+        .map((d) => ({ name: d.label, type: d.kind }));
+      if (external.length > 0) {
+        setUsbFoundDevices(external);
+        setUsbModalOpen(true);
+      }
+    }).catch(() => {});
+  }, [phase]);
 
   /* ─── Phase 1: load exam info ─────────────────── */
   useEffect(() => {
@@ -376,6 +400,56 @@ export default function ExamTakingPage() {
   if (phase === "ready" || (phase === "session-starting" && !exam?.examPassword)) {
     return (
       <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-950 to-indigo-950/20 p-4">
+        {/* ── USB Device Warning Modal ───────────────────────────── */}
+        {usbModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-slate-900 p-6 shadow-2xl space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30">
+                  <Icon d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" size={20} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-amber-300">External Devices Detected</h3>
+                  <p className="mt-1 text-xs text-white/60">
+                    The following devices were found connected to your computer. USB storage devices, external drives, and unauthorised peripherals are <span className="text-amber-300 font-medium">not permitted</span> during this exam.
+                  </p>
+                </div>
+              </div>
+              {usbFoundDevices.length > 0 && (
+                <ul className="rounded-xl border border-white/5 bg-white/[0.03] divide-y divide-white/5 max-h-40 overflow-y-auto text-xs">
+                  {usbFoundDevices.map((d, i) => (
+                    <li key={i} className="flex items-center justify-between px-3 py-2">
+                      <span className="text-white/80 truncate">{d.name}</span>
+                      <span className="ml-2 shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-white/40">{d.type}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-white/50">Please disconnect any USB storage devices, external hard drives, or flash drives before continuing. Built-in microphones and webcams are allowed.</p>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => {
+                    // Re-scan after student says they removed devices
+                    navigator.mediaDevices?.enumerateDevices?.().then((devs) => {
+                      const ext = devs.filter((d) => d.deviceId && d.deviceId !== "default" && d.label).map((d) => ({ name: d.label, type: d.kind }));
+                      setUsbFoundDevices(ext);
+                    }).catch(() => {});
+                  }}
+                  className="flex-1 rounded-xl border border-white/10 py-2.5 text-xs font-medium text-white/70 hover:bg-white/5 transition"
+                >
+                  Re-scan
+                </button>
+                <button
+                  onClick={() => { setUsbModalOpen(false); setUsbConfirmed(true); }}
+                  className="flex-1 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 py-2.5 text-xs font-semibold text-white transition hover:shadow-lg hover:shadow-amber-500/30"
+                >
+                  I understand, continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="w-full max-w-sm text-center">
           <div className="rounded-2xl border border-white/10 bg-slate-900/80 p-8 backdrop-blur-xl shadow-2xl space-y-4">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500/15 ring-1 ring-indigo-500/30">
@@ -392,11 +466,23 @@ export default function ExamTakingPage() {
               <InfoRow label="Max Attempts" value={exam?.maxAttempts ?? 1} />
               {exam?.instructions && <InfoRow label="Instructions" value={exam.instructions} />}
             </div>
+            {/* USB confirmation checkbox */}
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.02] p-3 text-left hover:bg-white/[0.04] transition">
+              <input
+                type="checkbox"
+                checked={usbConfirmed}
+                onChange={(e) => setUsbConfirmed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-400"
+              />
+              <span className="text-xs text-white/60 leading-relaxed">
+                I confirm that no USB storage devices or unauthorised peripherals are connected to my device.
+              </span>
+            </label>
             {startError && <p className="text-xs text-rose-400">{startError}</p>}
             <button
               onClick={handleStartExam}
-              disabled={phase === "session-starting"}
-              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 py-3 text-sm font-semibold text-white transition hover:shadow-lg hover:shadow-purple-500/30 disabled:opacity-60"
+              disabled={phase === "session-starting" || !usbConfirmed}
+              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 py-3 text-sm font-semibold text-white transition hover:shadow-lg hover:shadow-purple-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {phase === "session-starting" ? "Starting exam…" : "Start Exam →"}
             </button>
