@@ -390,6 +390,36 @@ async function listReportsForExam(req, res, next) {
   }
 }
 
+/** PATCH /api/questions/reports/:id  – mark a report as resolved / reopened */
+async function updateReportStatus(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { resolved } = req.body || {};
+    if (typeof resolved !== "boolean") {
+      throw new AppError("Field `resolved` must be a boolean", 400);
+    }
+
+    const report = await prisma.questionReport.findUnique({ where: { id } });
+    if (!report) throw new AppError("Report not found", 404);
+
+    // Only the exam creator can change a report's status
+    const exam = await prisma.exam.findFirst({
+      where: { id: report.examId, createdById: req.user.id },
+      select: { id: true },
+    });
+    if (!exam) throw new AppError("You don't have access to this report", 403);
+
+    const updated = await prisma.questionReport.update({
+      where: { id },
+      data: { resolved },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   addQuestion,
   addBulkQuestions,
@@ -400,4 +430,5 @@ module.exports = {
   mediaUpload,
   reportQuestion,
   listReportsForExam,
+  updateReportStatus,
 };

@@ -17,5 +17,6 @@ router.delete("/:id", authorize("EXAMINER", "ADMIN"), ctrl.deleteQuestion);
 // Student-flagged question reports
 router.post("/:id/report", authorize("STUDENT"), ctrl.reportQuestion);
 router.get("/exam/:examId/reports", authorize("EXAMINER", "ADMIN"), ctrl.listReportsForExam);
+router.patch("/reports/:id", authorize("EXAMINER", "ADMIN"), ctrl.updateReportStatus);
 
 module.exports = router;

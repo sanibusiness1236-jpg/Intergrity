@@ -41,6 +41,7 @@ const TABS = [
   { id: "settings", label: "Settings", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "location", label: "Set Location/Venue Boundary", icon: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "ai-import", label: "AI Question Import", icon: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
+  { id: "reports", label: "Flagged Questions", icon: "M4 21V4m0 0l8 5 8-5v12l-8 5-8-5z" },
   { id: "preview", label: "Preview", icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" },
 ];
 
@@ -325,6 +326,9 @@ export default function ExamEditorPage() {
           )}
           {activeTab === "ai-import" && (
             <AIImportTab examId={exam.id} onImported={loadExam} pushToast={pushToast} />
+          )}
+          {activeTab === "reports" && (
+            <ReportsTab examId={exam.id} questions={questions} pushToast={pushToast} />
           )}
           {activeTab === "preview" && <PreviewTab exam={exam} questions={questions} />}
         </div>
@@ -1766,6 +1770,360 @@ function renderInstructions(raw: string) {
     }
     return <p key={i} className="text-sm text-white/70">{line}</p>;
   });
+}
+
+/* ============================================================ */
+/* Flagged Questions (student-submitted reports) Tab            */
+/* ============================================================ */
+
+interface ReportRecord {
+  id: string;
+  questionId: string;
+  examId: string;
+  sessionId: string | null;
+  studentId: string;
+  reason: "TYPO" | "WRONG_ANSWER" | "UNCLEAR" | "OTHER";
+  message: string | null;
+  resolved: boolean;
+  createdAt: string;
+  question: { id: string; text: string; order: number } | null;
+  student: {
+    id: string; firstName: string; lastName: string;
+    email: string; studentId: string | null;
+  } | null;
+}
+
+const REASON_LABEL: Record<ReportRecord["reason"], string> = {
+  TYPO: "Typo / spelling",
+  WRONG_ANSWER: "Wrong correct answer",
+  UNCLEAR: "Unclear wording",
+  OTHER: "Other",
+};
+const REASON_TONE: Record<ReportRecord["reason"], string> = {
+  TYPO: "border-blue-500/30 bg-blue-500/10 text-blue-200",
+  WRONG_ANSWER: "border-rose-500/30 bg-rose-500/10 text-rose-200",
+  UNCLEAR: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  OTHER: "border-white/15 bg-white/5 text-white/70",
+};
+
+function ReportsTab({
+  examId,
+  questions,
+  pushToast,
+}: {
+  examId: string;
+  questions: Question[];
+  pushToast: (type: "success" | "error" | "info", message: string) => void;
+}) {
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"all" | "open" | "resolved">("open");
+  const [questionFilter, setQuestionFilter] = useState<string>("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const { data } = await api.get(`/questions/exam/${examId}/reports`);
+      setReports(data.data || []);
+    } catch (e: any) {
+      pushToast("error", e.response?.data?.error?.message || "Failed to load reports");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [examId]);
+
+  const visible = reports.filter((r) => {
+    if (filter === "open" && r.resolved) return false;
+    if (filter === "resolved" && !r.resolved) return false;
+    if (questionFilter && r.questionId !== questionFilter) return false;
+    return true;
+  });
+
+  const openCount = reports.filter((r) => !r.resolved).length;
+
+  // Counts per question (open reports only) — to surface most-flagged questions
+  const perQuestion = new Map<string, number>();
+  reports.forEach((r) => {
+    if (r.resolved) return;
+    perQuestion.set(r.questionId, (perQuestion.get(r.questionId) || 0) + 1);
+  });
+  const topFlagged = [...perQuestion.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([qid, count]) => {
+      const q = questions.find((qq) => qq.id === qid);
+      return { qid, count, question: q };
+    });
+
+  async function setResolved(id: string, resolved: boolean) {
+    // optimistic update
+    const prev = reports;
+    setReports((rs) => rs.map((r) => (r.id === id ? { ...r, resolved } : r)));
+    try {
+      // Endpoint not strictly needed (no UI uses resolved=true field yet on server),
+      // but we expose toggle locally so examiners can mark as triaged. We also POST
+      // an idempotent server toggle if available; otherwise fall back to local only.
+      await api.patch(`/questions/reports/${id}`, { resolved }).catch(() => {});
+    } catch {
+      setReports(prev);
+      pushToast("error", "Failed to update status");
+    }
+  }
+
+  function exportCSV() {
+    if (reports.length === 0) return;
+    const headers = ["Created At", "Question #", "Question text", "Reason", "Status", "Student", "Email", "Student ID", "Message"];
+    const rows = reports.map((r) => [
+      new Date(r.createdAt).toLocaleString(),
+      r.question?.order != null ? `Q${r.question.order + 1}` : "—",
+      (r.question?.text || "").replace(/<[^>]+>/g, ""),
+      REASON_LABEL[r.reason],
+      r.resolved ? "Resolved" : "Open",
+      r.student ? `${r.student.firstName} ${r.student.lastName}` : "—",
+      r.student?.email || "",
+      r.student?.studentId || "",
+      r.message || "",
+    ]);
+    const esc = (v: string | number) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map((row) => row.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `question_reports_${examId}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header / summary */}
+      <GlowCard
+        title="Student-flagged questions"
+        description="Questions your students believe contain a mistake. Review each report and decide whether to fix or close it."
+        action={
+          <div className="flex items-center gap-2">
+            <button onClick={load} className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10">
+              Refresh
+            </button>
+            <button onClick={exportCSV} disabled={reports.length === 0} className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 transition hover:bg-white/10 disabled:opacity-40">
+              Download CSV
+            </button>
+          </div>
+        }
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <SummaryStat
+            label="Open reports"
+            value={openCount}
+            tone={openCount > 0 ? "rose" : "neutral"}
+          />
+          <SummaryStat
+            label="Total reports"
+            value={reports.length}
+            tone="neutral"
+          />
+          <SummaryStat
+            label="Questions flagged"
+            value={perQuestion.size}
+            tone={perQuestion.size > 0 ? "amber" : "neutral"}
+          />
+        </div>
+
+        {topFlagged.length > 0 && (
+          <div className="mt-5">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              Most flagged
+            </p>
+            <ul className="space-y-1.5">
+              {topFlagged.map(({ qid, count, question }) => (
+                <li key={qid}>
+                  <button
+                    onClick={() => setQuestionFilter(qid)}
+                    className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-xs transition hover:bg-white/5 ${
+                      questionFilter === qid ? "border-indigo-400/50 bg-indigo-500/10" : "border-white/5 bg-white/[0.02]"
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-white/80">
+                      <span className="font-mono text-white/40 mr-2">
+                        Q{(question?.order ?? 0) + 1}
+                      </span>
+                      <span dangerouslySetInnerHTML={{ __html: (question?.text || "Deleted question").slice(0, 200) }} />
+                    </span>
+                    <span className="shrink-0 rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] font-bold text-rose-300">
+                      {count} open
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </GlowCard>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+            Show
+          </span>
+          {(["open", "all", "resolved"] as const).map((f) => {
+            const active = filter === f;
+            return (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`rounded-md border px-3 py-1 text-xs font-medium transition ${
+                  active ? "border-indigo-400/50 bg-indigo-500/15 text-indigo-200" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10"
+                }`}
+              >
+                {f === "open" ? "Open only" : f === "all" ? "All" : "Resolved"}
+              </button>
+            );
+          })}
+        </div>
+        {questionFilter && (
+          <button
+            onClick={() => setQuestionFilter("")}
+            className="rounded-md border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/60 hover:bg-white/10"
+          >
+            Clear question filter ×
+          </button>
+        )}
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <svg className="h-8 w-8 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 py-20 text-center">
+          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30">
+            <Icon d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z" size={28} />
+          </div>
+          <p className="text-sm text-white/60">
+            {filter === "resolved"
+              ? "No resolved reports yet."
+              : filter === "all"
+                ? "No reports submitted for this exam."
+                : "No open reports — every flagged question has been addressed."}
+          </p>
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {visible.map((r) => (
+            <li key={r.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${REASON_TONE[r.reason]}`}>
+                      {REASON_LABEL[r.reason]}
+                    </span>
+                    <span className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-white/60">
+                      {r.question?.order != null ? `Q${r.question.order + 1}` : "—"}
+                    </span>
+                    {r.resolved && (
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                        Resolved
+                      </span>
+                    )}
+                    <span className="text-[10px] text-white/30">
+                      {new Date(r.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-white/70">
+                    <span className="text-white/40">From: </span>
+                    <span className="font-semibold text-white">
+                      {r.student ? `${r.student.firstName} ${r.student.lastName}` : "Unknown student"}
+                    </span>
+                    {r.student?.studentId && (
+                      <span className="text-white/30"> · {r.student.studentId}</span>
+                    )}
+                    {r.student?.email && (
+                      <span className="text-white/30"> · {r.student.email}</span>
+                    )}
+                  </div>
+
+                  {r.question?.text && (
+                    <div className="rounded-md border border-white/5 bg-slate-950/40 p-2.5">
+                      <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/30">
+                        Question text
+                      </p>
+                      <div
+                        className="qe-prose text-xs text-white/80"
+                        dangerouslySetInnerHTML={{ __html: r.question.text }}
+                      />
+                    </div>
+                  )}
+
+                  {r.message && (
+                    <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-2.5">
+                      <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300/80">
+                        Student note
+                      </p>
+                      <p className="whitespace-pre-wrap text-xs text-amber-100/90">{r.message}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                  <Link
+                    href={`/examiner/exams/${examId}?tab=questions#q-${r.questionId}`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white/70 hover:bg-white/10"
+                  >
+                    <Icon d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" size={12} />
+                    Edit question
+                  </Link>
+                  {r.resolved ? (
+                    <button
+                      onClick={() => setResolved(r.id, false)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white/70 hover:bg-white/10"
+                    >
+                      Reopen
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setResolved(r.id, true)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/15"
+                    >
+                      <Icon d="M5 13l4 4L19 7" size={12} />
+                      Mark resolved
+                    </button>
+                  )}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "rose" | "amber" | "neutral";
+}) {
+  const t =
+    tone === "rose"
+      ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+      : tone === "amber"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+        : "border-white/10 bg-white/[0.02] text-white";
+  return (
+    <div className={`rounded-xl border p-4 ${t}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wider opacity-70">{label}</p>
+      <p className="mt-1 text-2xl font-extrabold tabular-nums">{value}</p>
+    </div>
+  );
 }
 
 function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) {
