@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/DashboardShell";
@@ -73,12 +74,18 @@ export default function StudentDashboard() {
   return (
     <DashboardShell>
       {/* ── Cinematic hero with student/AI background image ───────── */}
-      <section className="relative mb-10 overflow-hidden rounded-3xl border border-white/10 bg-slate-950/40">
-        {/* Background image (low opacity so icons / buttons stay readable) */}
-        <div
+      <section className="relative mb-10 min-h-[280px] overflow-hidden rounded-3xl border border-white/10 bg-slate-950/40">
+        {/* Background image — Next.js <Image fill> is resolved by Vercel
+            regardless of repo root-directory setting, unlike raw CSS url() */}
+        <Image
+          src="/student-hero.png"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="pointer-events-none object-cover object-center"
+          style={{ opacity: 0.22 }}
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: "url('/student-hero.png')", opacity: 0.22 }}
         />
         {/* Dark gradient wash so foreground text/buttons keep enough contrast */}
         <div
