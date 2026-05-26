@@ -251,6 +251,27 @@ model BehavioralFlag {
   @@map("behavioral_flags")
 }
 
+/// Student-submitted reports flagging a problem with a question
+/// (typo, wrong correct-answer, confusing wording, etc.).
+/// Stored without foreign-key relations to keep migrations cheap;
+/// the application layer validates `questionId` / `studentId` / `sessionId`.
+model QuestionReport {
+  id          String   @id @default(uuid())
+  questionId  String
+  examId      String
+  sessionId   String?
+  studentId   String
+  reason      String   // 'TYPO' | 'WRONG_ANSWER' | 'UNCLEAR' | 'OTHER'
+  message     String?
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([examId])
+  @@index([questionId])
+  @@index([studentId])
+  @@map("question_reports")
+}
+
 model IntegrityPrediction {
   id          String   @id @default(uuid())
   examId      String

@@ -279,4 +279,125 @@ async function deleteQuestion(req, res, next) {
   }
 }
 
-module.exports = { addQuestion, addBulkQuestions, getQuestions, updateQuestion, deleteQuestion, uploadMedia, mediaUpload };
+/* ============================================================
+ * Student-submitted question reports ("flag this question")
+ * ============================================================ */
+
+const VALID_REPORT_REASONS = ["TYPO", "WRONG_ANSWER", "UNCLEAR", "OTHER"];
+
+/** POST /api/questions/:id/report  – body { sessionId?, reason, message? } */
+async function reportQuestion(req, res, next) {
+  try {
+    const { id: questionId } = req.params;
+    const { sessionId, reason, message } = req.body || {};
+
+    if (!reason || !VALID_REPORT_REASONS.includes(reason)) {
+      throw new AppError(
+        `Reason must be one of: ${VALID_REPORT_REASONS.join(", ")}`,
+        400,
+      );
+    }
+
+    const question = await prisma.question.findUnique({
+      where: { id: questionId },
+      select: { id: true, examId: true },
+    });
+    if (!question) throw new AppError("Question not found", 404);
+
+    // If sessionId provided, verify it belongs to this student & exam
+    if (sessionId) {
+      const session = await prisma.examSession.findUnique({
+        where: { id: sessionId },
+        select: { studentId: true, examId: true },
+      });
+      if (!session) throw new AppError("Session not found", 404);
+      if (session.studentId !== req.user.id)
+        throw new AppError("Session does not belong to you", 403);
+      if (session.examId !== question.examId)
+        throw new AppError("Session/exam mismatch", 400);
+    }
+
+    // Prevent the same student spamming the same question
+    const existing = await prisma.questionReport.findFirst({
+      where: { questionId, studentId: req.user.id, resolved: false },
+    });
+    if (existing) {
+      return res.json({
+        success: true,
+        data: existing,
+        message: "You already reported this question",
+      });
+    }
+
+    const report = await prisma.questionReport.create({
+      data: {
+        questionId,
+        examId: question.examId,
+        sessionId: sessionId || null,
+        studentId: req.user.id,
+        reason,
+        message: typeof message === "string" ? message.slice(0, 1000) : null,
+      },
+    });
+
+    res.status(201).json({ success: true, data: report });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /api/questions/exam/:examId/reports  – examiner-only list */
+async function listReportsForExam(req, res, next) {
+  try {
+    const { examId } = req.params;
+
+    const exam = await prisma.exam.findFirst({
+      where: { id: examId, createdById: req.user.id },
+      select: { id: true },
+    });
+    if (!exam) throw new AppError("Exam not found", 404);
+
+    const reports = await prisma.questionReport.findMany({
+      where: { examId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Hydrate question text + student name so the UI can show context
+    const questionIds = [...new Set(reports.map((r) => r.questionId))];
+    const studentIds = [...new Set(reports.map((r) => r.studentId))];
+    const [questions, students] = await Promise.all([
+      prisma.question.findMany({
+        where: { id: { in: questionIds } },
+        select: { id: true, text: true, order: true },
+      }),
+      prisma.user.findMany({
+        where: { id: { in: studentIds } },
+        select: { id: true, firstName: true, lastName: true, email: true, studentId: true },
+      }),
+    ]);
+    const qById = Object.fromEntries(questions.map((q) => [q.id, q]));
+    const sById = Object.fromEntries(students.map((s) => [s.id, s]));
+
+    const hydrated = reports.map((r) => ({
+      ...r,
+      question: qById[r.questionId] || null,
+      student: sById[r.studentId] || null,
+    }));
+
+    res.json({ success: true, data: hydrated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  addQuestion,
+  addBulkQuestions,
+  getQuestions,
+  updateQuestion,
+  deleteQuestion,
+  uploadMedia,
+  mediaUpload,
+  reportQuestion,
+  listReportsForExam,
+};

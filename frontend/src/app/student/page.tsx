@@ -72,51 +72,79 @@ export default function StudentDashboard() {
 
   return (
     <DashboardShell>
-      <header className="mb-10 space-y-5">
-        <AnnouncementBadge
-          tag={inProgress > 0 ? "Live" : newlyAvailable.length > 0 ? "New" : "Tip"}
-          message={
-            inProgress > 0
-              ? `You have ${inProgress} exam${inProgress > 1 ? "s" : ""} in progress`
-              : newlyAvailable.length > 0
-              ? `${newlyAvailable.length} exam${newlyAvailable.length > 1 ? "s are" : " is"} available for you to start`
-              : "Pro tip: Don't switch tabs during exams"
-          }
-          tone={inProgress > 0 || newlyAvailable.length > 0 ? "warning" : "default"}
+      {/* ── Cinematic hero with student/AI background image ───────── */}
+      <section className="relative mb-10 overflow-hidden rounded-3xl border border-white/10 bg-slate-950/40">
+        {/* Background image (low opacity so icons / buttons stay readable) */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: "url('/student-hero.png')", opacity: 0.22 }}
+        />
+        {/* Dark gradient wash so foreground text/buttons keep enough contrast */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/40"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-slate-950/85"
+        />
+        {/* Purple/indigo glow accents */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/25 blur-3xl"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-24 -right-20 h-72 w-72 rounded-full bg-purple-500/20 blur-3xl"
         />
 
-        <GradientHeading
-          highlight="Hi,"
-          title={`${user?.firstName || "Student"}.`}
-          subtitle="Stay focused, stay honest. Your exams, schedules, and scores — protected by real-time AI integrity monitoring."
-        />
+        <div className="relative z-10 px-6 py-10 md:px-12 md:py-14 space-y-5">
+          <AnnouncementBadge
+            tag={inProgress > 0 ? "Live" : newlyAvailable.length > 0 ? "New" : "Tip"}
+            message={
+              inProgress > 0
+                ? `You have ${inProgress} exam${inProgress > 1 ? "s" : ""} in progress`
+                : newlyAvailable.length > 0
+                ? `${newlyAvailable.length} exam${newlyAvailable.length > 1 ? "s are" : " is"} available for you to start`
+                : "Pro tip: Don't switch tabs during exams"
+            }
+            tone={inProgress > 0 || newlyAvailable.length > 0 ? "warning" : "default"}
+          />
 
-        <div className="flex flex-wrap gap-3 pt-2">
-          {inProgress > 0 ? (
-            <Link href={`/student/exam/${sessions.find((s) => s.status === "IN_PROGRESS")?.examId}`}>
-              <GlowButton variant="gradient" size="lg">
-                Resume Exam
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M5 3l14 9-14 9V3z" strokeLinejoin="round" />
-                </svg>
+          <GradientHeading
+            highlight="Welcome,"
+            title={`${user?.firstName || "Student"}.`}
+            subtitle="Stay focused, stay honest. Your exams, schedules, and scores — protected by real-time AI integrity monitoring."
+          />
+
+          <div className="flex flex-wrap gap-3 pt-2">
+            {inProgress > 0 ? (
+              <Link href={`/student/exam/${sessions.find((s) => s.status === "IN_PROGRESS")?.examId}`}>
+                <GlowButton variant="gradient" size="lg">
+                  Resume Exam
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M5 3l14 9-14 9V3z" strokeLinejoin="round" />
+                  </svg>
+                </GlowButton>
+              </Link>
+            ) : newlyAvailable.length > 0 ? (
+              <Link href="/student/exam">
+                <GlowButton variant="gradient" size="lg">
+                  View Available Exams →
+                </GlowButton>
+              </Link>
+            ) : (
+              <GlowButton variant="gradient" size="lg" disabled>
+                No active exam
               </GlowButton>
-            </Link>
-          ) : newlyAvailable.length > 0 ? (
+            )}
             <Link href="/student/exam">
-              <GlowButton variant="gradient" size="lg">
-                View Available Exams →
-              </GlowButton>
+              <GlowButton variant="ghost" size="lg">My Exams</GlowButton>
             </Link>
-          ) : (
-            <GlowButton variant="gradient" size="lg" disabled>
-              No active exam
-            </GlowButton>
-          )}
-          <Link href="/student/exam">
-            <GlowButton variant="ghost" size="lg">My Exams</GlowButton>
-          </Link>
+          </div>
         </div>
-      </header>
+      </section>
 
       <section className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total Exams" value={total} accent="indigo" icon={<Icon d="M9 12h6M9 16h6M9 8h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" />} />
