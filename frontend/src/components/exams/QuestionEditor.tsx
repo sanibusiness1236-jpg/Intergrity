@@ -1,7 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
 import type { Question, QuestionType } from "@/types";
+import {
+  AudioBlock,
+  type Block,
+  type BlockType,
+  CodeBlock,
+  defaultBlock,
+  ImageBlock,
+  LatexBlock,
+  TableBlock,
+  uid,
+} from "./blocks";
 
 export const QTYPE_LABEL: Record<QuestionType, string> = {
   MCQ: "Multiple Choice",
@@ -26,19 +40,25 @@ export const QTYPE_ICON: Record<QuestionType, string> = {
 
 export interface QuestionFormValue {
   type: QuestionType;
-  text: string;
+  text: string;            // HTML (for non-multi-blank) or plain text (for multi-blank)
   options: string[];
   correctAnswerStr: string;
   blanks: string[];
   marks: number;
   fillInBlankType: "text" | "dropdown";
   dropdownOptions: string[];
+  blocks: Block[];
 }
 
 export function questionToForm(q: Partial<Question>): QuestionFormValue {
-  const fibType = (q as any).fillInBlankType === "dropdown" ? "dropdown" : "text";
+  const fibType = (q as { fillInBlankType?: string }).fillInBlankType === "dropdown" ? "dropdown" : "text";
   const existingDropdown =
     fibType === "dropdown" && Array.isArray(q.options) ? [...(q.options as string[])] : ["", "", ""];
+
+  const rawBlocks = (q as { blocks?: Block[] }).blocks;
+  const blocks: Block[] = Array.isArray(rawBlocks)
+    ? rawBlocks.map((b) => ({ ...b, id: b.id || uid() }))
+    : [];
 
   return {
     type: (q.type as QuestionType) || "MCQ",
@@ -55,15 +75,41 @@ export function questionToForm(q: Partial<Question>): QuestionFormValue {
     marks: q.marks ?? 1,
     fillInBlankType: fibType,
     dropdownOptions: existingDropdown,
+    blocks,
   };
 }
+
+// Helpers --------------------------------------------------
+
+function htmlToPlainText(html: string): string {
+  // crude server-safe HTML strip — only used for validation
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function isHtmlEmpty(html: string): boolean {
+  return htmlToPlainText(html).length === 0;
+}
+
+// ---------------------------------------------------------
 
 export function formToPayload(form: QuestionFormValue): {
   payload: Partial<Question> | null;
   error: string | null;
 } {
-  if (!form.text.trim()) return { payload: null, error: "Question text is required" };
+  const isMultiBlank = form.type === "MULTI_BLANK_EQUATION";
+  const textEmpty = isMultiBlank ? !form.text.trim() : isHtmlEmpty(form.text);
+  if (textEmpty) return { payload: null, error: "Question text is required" };
   if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
+
+  const blocks = form.blocks.length > 0 ? form.blocks : undefined;
 
   if (form.type === "MCQ") {
     const opts = form.options.map((o) => o.trim()).filter(Boolean);
@@ -72,7 +118,7 @@ export function formToPayload(form: QuestionFormValue): {
       return { payload: null, error: "Select which option is correct" };
     }
     return {
-      payload: { type: "MCQ", text: form.text, options: opts, correctAnswer: form.correctAnswerStr, marks: form.marks },
+      payload: { type: "MCQ", text: form.text, options: opts, correctAnswer: form.correctAnswerStr, marks: form.marks, blocks } as Partial<Question>,
       error: null,
     };
   }
@@ -82,7 +128,7 @@ export function formToPayload(form: QuestionFormValue): {
       return { payload: null, error: "Pick True or False" };
     }
     return {
-      payload: { type: "TRUE_FALSE", text: form.text, correctAnswer: form.correctAnswerStr, marks: form.marks },
+      payload: { type: "TRUE_FALSE", text: form.text, correctAnswer: form.correctAnswerStr, marks: form.marks, blocks } as Partial<Question>,
       error: null,
     };
   }
@@ -102,7 +148,8 @@ export function formToPayload(form: QuestionFormValue): {
           correctAnswer: form.correctAnswerStr,
           marks: form.marks,
           fillInBlankType: "dropdown",
-        } as any,
+          blocks,
+        } as Partial<Question>,
         error: null,
       };
     }
@@ -114,7 +161,8 @@ export function formToPayload(form: QuestionFormValue): {
         correctAnswer: form.correctAnswerStr.trim(),
         marks: form.marks,
         fillInBlankType: "text",
-      } as any,
+        blocks,
+      } as Partial<Question>,
       error: null,
     };
   }
@@ -130,7 +178,7 @@ export function formToPayload(form: QuestionFormValue): {
       };
     }
     return {
-      payload: { type: "MULTI_BLANK_EQUATION", text: form.text, correctAnswer: blanks, marks: form.marks },
+      payload: { type: "MULTI_BLANK_EQUATION", text: form.text, correctAnswer: blanks, marks: form.marks, blocks } as Partial<Question>,
       error: null,
     };
   }
@@ -151,6 +199,159 @@ const Svg = ({ d, size = 14 }: { d: string; size?: number }) => (
     <path d={d} />
   </svg>
 );
+
+// ---------------------------------------------------------
+//  Rich-text editor for question text (TipTap)
+// ---------------------------------------------------------
+
+function RichQuestionText({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (html: string) => void;
+  placeholder: string;
+}) {
+  const editor = useEditor({
+    extensions: [StarterKit, Underline],
+    content: value || "",
+    immediatelyRender: false,
+    onUpdate({ editor }) {
+      const html = editor.getHTML();
+      // tiptap returns "<p></p>" for an empty editor — normalize to empty
+      onChange(html === "<p></p>" ? "" : html);
+    },
+    editorProps: {
+      attributes: {
+        class: "qe-prose min-h-[90px] w-full px-3 py-2 text-sm focus:outline-none",
+        "data-placeholder": placeholder,
+      },
+    },
+  });
+
+  // Sync external value changes (e.g. when switching between editing different questions)
+  useEffect(() => {
+    if (editor && value !== undefined && editor.getHTML() !== value) {
+      editor.commands.setContent(value || "", { emitUpdate: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, editor]);
+
+  if (!editor) {
+    return (
+      <div className="auth-input min-h-[120px] w-full rounded-lg px-3 py-2 text-sm text-white/30">
+        {placeholder}
+      </div>
+    );
+  }
+
+  const btn = (action: () => boolean, label: React.ReactNode, active: boolean, title: string) => (
+    <button
+      key={title}
+      type="button"
+      title={title}
+      onMouseDown={(e) => { e.preventDefault(); action(); }}
+      className={`flex h-7 min-w-[28px] items-center justify-center rounded px-1.5 text-xs font-semibold transition ${
+        active
+          ? "bg-indigo-500/30 text-indigo-100 ring-1 ring-indigo-400/40"
+          : "text-white/60 hover:bg-white/10 hover:text-white"
+      }`}
+    >{label}</button>
+  );
+
+  return (
+    <div className="qe-editor rounded-lg border border-white/10 bg-slate-950/40">
+      <div className="flex flex-wrap items-center gap-1 border-b border-white/5 px-2 py-1">
+        {btn(() => editor.chain().focus().toggleBold().run(),       <span className="font-bold">B</span>,        editor.isActive("bold"),      "Bold")}
+        {btn(() => editor.chain().focus().toggleItalic().run(),     <span className="italic">I</span>,           editor.isActive("italic"),    "Italic")}
+        {btn(() => editor.chain().focus().toggleUnderline().run(),  <span className="underline">U</span>,         editor.isActive("underline"), "Underline")}
+        {btn(() => editor.chain().focus().toggleStrike().run(),     <span className="line-through">S</span>,      editor.isActive("strike"),    "Strikethrough")}
+        <span className="mx-1 h-4 w-px bg-white/10" />
+        {btn(() => editor.chain().focus().toggleHeading({ level: 2 }).run(), "H2", editor.isActive("heading", { level: 2 }), "Heading 2")}
+        {btn(() => editor.chain().focus().toggleHeading({ level: 3 }).run(), "H3", editor.isActive("heading", { level: 3 }), "Heading 3")}
+        <span className="mx-1 h-4 w-px bg-white/10" />
+        {btn(() => editor.chain().focus().toggleBulletList().run(),  "• List",  editor.isActive("bulletList"),  "Bullet list")}
+        {btn(() => editor.chain().focus().toggleOrderedList().run(), "1. List", editor.isActive("orderedList"), "Numbered list")}
+        {btn(() => editor.chain().focus().toggleBlockquote().run(),  "❝",       editor.isActive("blockquote"),   "Quote")}
+        {btn(() => editor.chain().focus().toggleCode().run(),         <span className="font-mono">{"<>"}</span>, editor.isActive("code"), "Inline code")}
+      </div>
+      <EditorContent editor={editor} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------
+//  Per-block wrapper (with delete + move controls)
+// ---------------------------------------------------------
+
+const BLOCK_META: Record<BlockType, { label: string; pathD: string; tone: string }> = {
+  image: { label: "Image", pathD: "M4 5a2 2 0 012-2h12a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm12 4a2 2 0 11-4 0 2 2 0 014 0zm-1 7l-3-3-2 2-3-3-3 4h14l-3-2z", tone: "bg-pink-500/15 text-pink-300 border-pink-500/30" },
+  audio: { label: "Audio", pathD: "M9 19V6l12-3v13M9 19a3 3 0 11-6 0 3 3 0 016 0zm12-3a3 3 0 11-6 0 3 3 0 016 0z", tone: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+  code:  { label: "Code",  pathD: "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4", tone: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
+  table: { label: "Table", pathD: "M3 10h18M3 14h18M3 6h18M3 18h18M7 3v18M17 3v18", tone: "bg-blue-500/15 text-blue-300 border-blue-500/30" },
+  latex: { label: "LaTeX", pathD: "M4 6h16M6 6v12m12-12v12M9 12h6", tone: "bg-purple-500/15 text-purple-300 border-purple-500/30" },
+};
+
+function AttachedBlock({
+  block,
+  index,
+  total,
+  onChange,
+  onDelete,
+  onMove,
+}: {
+  block: Block;
+  index: number;
+  total: number;
+  onChange: (b: Block) => void;
+  onDelete: () => void;
+  onMove: (delta: -1 | 1) => void;
+}) {
+  const meta = BLOCK_META[block.type as Exclude<BlockType, never>] || BLOCK_META.image;
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${meta.tone}`}>
+          <Svg d={meta.pathD} size={10} />
+          {meta.label}
+        </span>
+        <span className="text-[10px] text-white/30">Block #{index + 1}</span>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onMove(-1)}
+            disabled={index === 0}
+            title="Move up"
+            className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-white/60 transition hover:bg-white/10 disabled:opacity-30"
+          >↑</button>
+          <button
+            type="button"
+            onClick={() => onMove(1)}
+            disabled={index === total - 1}
+            title="Move down"
+            className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-white/60 transition hover:bg-white/10 disabled:opacity-30"
+          >↓</button>
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Remove block"
+            className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-rose-300 transition hover:bg-rose-500/15"
+          >Remove</button>
+        </div>
+      </div>
+      {block.type === "image" && <ImageBlock block={block} onChange={onChange} />}
+      {block.type === "audio" && <AudioBlock block={block} onChange={onChange} />}
+      {block.type === "code"  && <CodeBlock  block={block} onChange={onChange} />}
+      {block.type === "table" && <TableBlock block={block} onChange={onChange} />}
+      {block.type === "latex" && <LatexBlock block={block} onChange={onChange} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------
+//  MAIN
+// ---------------------------------------------------------
 
 export function QuestionEditor({
   initial,
@@ -179,8 +380,9 @@ export function QuestionEditor({
     setIsSaving(true);
     try {
       await onSave(payload);
-    } catch (e: any) {
-      setError(e.response?.data?.error?.message || "Save failed");
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
+      setError(msg || "Save failed");
     } finally {
       setIsSaving(false);
     }
@@ -190,9 +392,41 @@ export function QuestionEditor({
     setForm({ ...form, type: t, correctAnswerStr: "", fillInBlankType: "text" });
   }
 
+  function insertBlock(type: BlockType) {
+    setForm({ ...form, blocks: [...form.blocks, defaultBlock(type)] });
+  }
+
+  function updateBlock(id: string, updated: Block) {
+    setForm({ ...form, blocks: form.blocks.map((b) => (b.id === id ? updated : b)) });
+  }
+
+  function deleteBlock(id: string) {
+    setForm({ ...form, blocks: form.blocks.filter((b) => b.id !== id) });
+  }
+
+  function moveBlock(id: string, delta: -1 | 1) {
+    const idx = form.blocks.findIndex((b) => b.id === id);
+    if (idx < 0) return;
+    const target = idx + delta;
+    if (target < 0 || target >= form.blocks.length) return;
+    const next = [...form.blocks];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setForm({ ...form, blocks: next });
+  }
+
+  const insertButtons: { type: BlockType; label: string; pathD: string }[] = [
+    { type: "image", label: "Image", pathD: BLOCK_META.image.pathD },
+    { type: "audio", label: "Audio", pathD: BLOCK_META.audio.pathD },
+    { type: "table", label: "Table", pathD: BLOCK_META.table.pathD },
+    { type: "code",  label: "Code",  pathD: BLOCK_META.code.pathD  },
+    { type: "latex", label: "LaTeX", pathD: BLOCK_META.latex.pathD },
+  ];
+
+  const isMultiBlank = form.type === "MULTI_BLANK_EQUATION";
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
-      {/* Type + Points row */}
+      {/* Type + Points */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="space-y-1.5 md:col-span-2">
           <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Type</label>
@@ -227,28 +461,75 @@ export function QuestionEditor({
         </div>
       </div>
 
-      {/* Question text */}
+      {/* Question text — rich or plain */}
       <div className="space-y-1.5">
-        <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
-          Question Text
-          {form.type === "MULTI_BLANK_EQUATION" && (
+        <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">
+          <span>Question Text</span>
+          {isMultiBlank && (
             <span className="ml-2 normal-case text-white/40">
               — use <code className="rounded bg-white/10 px-1">___</code> for each blank
             </span>
           )}
         </label>
-        <textarea
-          className="auth-input min-h-[90px] w-full rounded-lg px-3 py-2 text-sm"
-          value={form.text}
-          onChange={(e) => setForm({ ...form, text: e.target.value })}
-          placeholder={
-            form.type === "MULTI_BLANK_EQUATION"
-              ? 'e.g. "SELECT ___ FROM users WHERE id = ___"'
-              : "Enter the question..."
-          }
-          required
-        />
+
+        {isMultiBlank ? (
+          <textarea
+            className="auth-input min-h-[90px] w-full rounded-lg px-3 py-2 text-sm"
+            value={form.text}
+            onChange={(e) => setForm({ ...form, text: e.target.value })}
+            placeholder='e.g. "SELECT ___ FROM users WHERE id = ___"'
+            required
+          />
+        ) : (
+          <RichQuestionText
+            value={form.text}
+            onChange={(html) => setForm({ ...form, text: html })}
+            placeholder="Enter the question. You can format text using the toolbar above."
+          />
+        )}
       </div>
+
+      {/* Insert media toolbar */}
+      <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Insert into question</span>
+          <span className="text-[10px] text-white/30">— attach rich media blocks</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {insertButtons.map((b) => (
+            <button
+              key={b.type}
+              type="button"
+              onClick={() => insertBlock(b.type)}
+              className="group flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition hover:border-indigo-400/40 hover:bg-indigo-500/15 hover:text-indigo-100"
+            >
+              <Svg d={b.pathD} size={13} />
+              <span>{b.label}</span>
+              <span className="text-white/30 group-hover:text-indigo-300">+</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Attached blocks list */}
+      {form.blocks.length > 0 && (
+        <div className="space-y-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+            Attached Blocks ({form.blocks.length})
+          </div>
+          {form.blocks.map((b, i) => (
+            <AttachedBlock
+              key={b.id}
+              block={b}
+              index={i}
+              total={form.blocks.length}
+              onChange={(updated) => updateBlock(b.id, updated)}
+              onDelete={() => deleteBlock(b.id)}
+              onMove={(delta) => moveBlock(b.id, delta)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* MCQ options */}
       {form.type === "MCQ" && (
@@ -338,7 +619,6 @@ export function QuestionEditor({
       {/* Fill in the Blank */}
       {form.type === "FILL_IN_BLANK" && (
         <div className="space-y-3">
-          {/* Input type toggle */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Student Input Type</label>
             <div className="flex gap-2">
@@ -374,7 +654,6 @@ export function QuestionEditor({
             </p>
           </div>
 
-          {/* Dropdown options + correct answer */}
           {form.fillInBlankType === "dropdown" ? (
             <div className="space-y-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Dropdown Options</label>
@@ -414,7 +693,7 @@ export function QuestionEditor({
                         const nextCorrect = form.correctAnswerStr === opt ? "" : form.correctAnswerStr;
                         setForm({ ...form, dropdownOptions: opts, correctAnswerStr: nextCorrect });
                       }}
-                      className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rosese-300"
+                      className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
                     >
                       <Svg d="M18 6L6 18M6 6l12 12" />
                     </button>

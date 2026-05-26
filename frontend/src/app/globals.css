@@ -223,4 +223,30 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
   }
+
+  /* Rich-text rendering for question content (TipTap output) */
+  .qe-prose p { margin: 0.25rem 0; }
+  .qe-prose p:empty { min-height: 0.5rem; }
+  .qe-prose h1 { font-size: 1.25rem; font-weight: 700; margin: 0.5rem 0 0.25rem; }
+  .qe-prose h2 { font-size: 1.125rem; font-weight: 700; margin: 0.4rem 0 0.2rem; }
+  .qe-prose h3 { font-size: 1rem; font-weight: 600; margin: 0.4rem 0 0.2rem; }
+  .qe-prose ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+  .qe-prose ol { list-style: decimal; padding-left: 1.25rem; margin: 0.25rem 0; }
+  .qe-prose blockquote { border-left: 3px solid rgba(255, 255, 255, 0.2); padding-left: 0.75rem; margin: 0.5rem 0; font-style: italic; opacity: 0.85; }
+  .qe-prose code { background: rgba(255, 255, 255, 0.08); padding: 1px 4px; border-radius: 4px; font-size: 0.85em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .qe-prose pre { background: rgba(0, 0, 0, 0.3); padding: 0.5rem 0.75rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.85em; }
+  .qe-prose strong { font-weight: 700; }
+  .qe-prose em { font-style: italic; }
+  .qe-prose u { text-decoration: underline; }
+  .qe-prose s { text-decoration: line-through; opacity: 0.7; }
+  .qe-prose a { color: #818cf8; text-decoration: underline; }
+
+  /* Placeholder hint in empty TipTap editor */
+  .qe-prose p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: rgba(255, 255, 255, 0.3);
+    pointer-events: none;
+    float: left;
+    height: 0;
+  }
 }

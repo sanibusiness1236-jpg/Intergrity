@@ -6,6 +6,7 @@ import api from "@/lib/api";
 import { connectSocket, disconnectSocket } from "@/lib/socket";
 import { useAntiCheat } from "@/hooks/useAntiCheat";
 import type { Question } from "@/types";
+import { BlockList } from "@/components/exams/blocks";
 
 const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -576,7 +577,20 @@ export default function ExamTakingPage() {
                 <span className="text-xs font-medium text-white/50">{q.marks} {q.marks === 1 ? "mark" : "marks"}</span>
               </div>
 
-              <p className="mb-6 text-lg leading-relaxed text-white sm:text-xl">{q.text}</p>
+              {q.type === "MULTI_BLANK_EQUATION" ? (
+                <p className="mb-6 text-lg leading-relaxed text-white sm:text-xl">{q.text}</p>
+              ) : (
+                <div
+                  className="qe-prose mb-6 text-lg leading-relaxed text-white sm:text-xl"
+                  dangerouslySetInnerHTML={{ __html: q.text || "" }}
+                />
+              )}
+
+              {Array.isArray(q.blocks) && q.blocks.length > 0 && (
+                <div className="mb-6 space-y-3">
+                  <BlockList blocks={q.blocks} />
+                </div>
+              )}
 
               {/* MCQ */}
               {q.type === "MCQ" && Array.isArray(q.options) && (

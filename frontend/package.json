@@ -20,6 +20,7 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.0",
     "@tiptap/extension-placeholder": "^3.23.6",
+    "@tiptap/extension-underline": "^3.23.6",
     "@tiptap/pm": "^3.23.6",
     "@tiptap/react": "^3.23.6",
     "@tiptap/starter-kit": "^3.23.6",

@@ -13,11 +13,11 @@ import {
   QTYPE_TONE,
   QTYPE_ICON,
 } from "@/components/exams/QuestionEditor";
+import { BlockList } from "@/components/exams/blocks";
 import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark } from "@/types";
 import type { GeofenceData } from "@/components/exams/GeofenceMap";
 
 const GeofenceMap = dynamic(() => import("@/components/exams/GeofenceMap"), { ssr: false });
-const BlockQuestionEditor = dynamic(() => import("@/components/exams/BlockQuestionEditor"), { ssr: false });
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-white/10 text-white/70 border-white/15",
@@ -41,7 +41,6 @@ const TABS = [
   { id: "settings", label: "Settings", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "location", label: "Set Location/Venue Boundary", icon: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "ai-import", label: "AI Question Import", icon: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
-  { id: "block-editor", label: "Block Editor", icon: "M4 6h16M4 12h16M4 18h7" },
   { id: "preview", label: "Preview", icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" },
 ];
 
@@ -326,9 +325,6 @@ export default function ExamEditorPage() {
           )}
           {activeTab === "ai-import" && (
             <AIImportTab examId={exam.id} onImported={loadExam} pushToast={pushToast} />
-          )}
-          {activeTab === "block-editor" && (
-            <BlockEditorTab examId={exam.id} />
           )}
           {activeTab === "preview" && <PreviewTab exam={exam} questions={questions} />}
         </div>
@@ -865,7 +861,20 @@ function QuestionCard({
               </span>
             )}
           </div>
-          <p className="text-sm text-white">{question.text}</p>
+          <div
+            className="qe-prose text-sm text-white"
+            dangerouslySetInnerHTML={{ __html: question.text || "" }}
+          />
+
+          {Array.isArray(question.blocks) && question.blocks.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                <Icon d="M4 6h16M4 12h16M4 18h7" size={10} />
+                {question.blocks.length} attached block{question.blocks.length === 1 ? "" : "s"}
+              </div>
+              <BlockList blocks={question.blocks} />
+            </div>
+          )}
 
           {question.type === "MCQ" && Array.isArray(question.options) && (
             <div className="space-y-1">
@@ -1720,34 +1729,6 @@ function renderInstructions(raw: string) {
   });
 }
 
-/* ============================================================ */
-/* Block Editor Tab                                             */
-/* ============================================================ */
-
-function BlockEditorTab({ examId }: { examId: string }) {
-  const [blockCount, setBlockCount] = useState(0);
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-3 py-0.5 font-medium">
-          Block Editor
-        </span>
-        {blockCount > 0 && (
-          <span className="text-xs text-gray-500">
-            {blockCount} block question{blockCount !== 1 ? "s" : ""}
-          </span>
-        )}
-      </div>
-      <p className="text-sm text-gray-500 mb-4">
-        Build rich questions using structured content blocks — formatted text, LaTeX math,
-        images, code with syntax highlighting, editable tables, and audio clips.
-        All media is stored in cloud storage; only URLs are saved to the database.
-      </p>
-      <BlockQuestionEditor examId={examId} onCountChange={setBlockCount} />
-    </div>
-  );
-}
-
 function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) {
   const examTypeLabel = exam.examType === "OTHER" && exam.examTypeOther
     ? exam.examTypeOther
@@ -1798,7 +1779,20 @@ function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) 
                     <span className="font-bold text-white">Question {i + 1}</span>
                     <span className="text-white/40">{q.marks} pt{q.marks !== 1 ? "s" : ""}</span>
                   </div>
-                  <p className="mb-3 text-sm text-white">{q.text}</p>
+                  {q.type === "MULTI_BLANK_EQUATION" ? (
+                    <p className="mb-3 text-sm text-white">{q.text}</p>
+                  ) : (
+                    <div
+                      className="qe-prose mb-3 text-sm text-white"
+                      dangerouslySetInnerHTML={{ __html: q.text || "" }}
+                    />
+                  )}
+
+                  {Array.isArray(q.blocks) && q.blocks.length > 0 && (
+                    <div className="mb-3 space-y-2">
+                      <BlockList blocks={q.blocks} />
+                    </div>
+                  )}
 
                   {q.type === "MCQ" && Array.isArray(q.options) && (
                     <div className="space-y-2">

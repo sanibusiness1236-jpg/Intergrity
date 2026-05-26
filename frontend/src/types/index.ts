@@ -65,6 +65,15 @@ export interface Exam {
   _count?: { questions: number; examSessions: number; submittedSessions: number };
 }
 
+export interface QuestionBlock {
+  id: string;
+  type: "latex" | "image" | "code" | "table" | "audio";
+  content?: string;
+  url?: string;
+  data?: string[][];
+  language?: string;
+}
+
 export interface Question {
   id: string;
   examId: string;
@@ -76,6 +85,7 @@ export interface Question {
   order: number;
   explanation?: string;
   fillInBlankType?: "text" | "dropdown";
+  blocks?: QuestionBlock[];
 }
 
 export type SessionStatus = "WAITING" | "IN_PROGRESS" | "SUBMITTED" | "TIMED_OUT" | "DISCONNECTED";
