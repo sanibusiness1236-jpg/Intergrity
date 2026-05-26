@@ -431,14 +431,22 @@ async function getLiveSessions(req, res, next) {
     const { examId, search, gender } = req.query;
     if (!examId) throw new AppError("examId is required", 400);
 
-    const exam = await prisma.exam.findFirst({
-      where: { id: examId, createdById: req.user.id },
-      select: { title: true, courseCode: true },
+    // Accept ONE examId, or several comma-separated examIds for simultaneous monitoring
+    const examIds = String(examId)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const exams = await prisma.exam.findMany({
+      where: { id: { in: examIds }, createdById: req.user.id },
+      select: { id: true, title: true, courseCode: true },
     });
-    if (!exam) throw new AppError("Exam not found", 404);
+    if (exams.length === 0) throw new AppError("Exam not found", 404);
+
+    const examById = Object.fromEntries(exams.map((e) => [e.id, e]));
 
     const sessions = await prisma.examSession.findMany({
-      where: { examId },
+      where: { examId: { in: exams.map((e) => e.id) } },
       include: {
         student: {
           select: { id: true, firstName: true, lastName: true, email: true, studentId: true, gender: true, program: true },
@@ -449,24 +457,51 @@ async function getLiveSessions(req, res, next) {
     });
 
     let rows = sessions.map((s) => {
-      const cf = (t) => s.behavioralFlags.filter((f) => f.flagType === t).length;
+      const flagsOf = (t) => s.behavioralFlags.filter((f) => f.flagType === t);
+      const cf = (t) => flagsOf(t).length;
+
+      // TIME AWAY = sum of seconds the student spent on another tab/app.
+      // The client puts the per-incident duration into metadata.seconds when
+      // the visibilitychange handler fires on return. We sum those.
+      const tabSwitchFlags = flagsOf("TAB_SWITCH");
+      const timeAwaySeconds = tabSwitchFlags.reduce((acc, f) => {
+        const meta = f.metadata || {};
+        const s = typeof meta.seconds === "number" ? meta.seconds : 0;
+        return acc + s;
+      }, 0);
+
+      // USB events from the client are rate-limited (one per 2 s) so any
+      // non-zero count means there really was a device-change burst.
+      const usbDetected = cf("USB_DETECTED") > 0;
+
+      // Window minimize (WINDOW_BLUR) — distinct from tab switch.
+      const windowMinimized = cf("WINDOW_BLUR") > 0;
+
+      const e = examById[s.examId] || { id: s.examId, title: "", courseCode: "" };
       return {
         sessionId: s.id,
+        examId: s.examId,
+        examTitle: e.title,
+        examCourseCode: e.courseCode,
         studentDbId: s.student.id,
         studentName: `${s.student.firstName} ${s.student.lastName}`,
         studentUsername: s.student.email?.split("@")[0] || s.student.studentId || s.student.id,
         gender: s.student.gender || "",
         program: s.student.program || "",
         status: s.status,
+        submittedAt: s.submittedAt,
         tab_switch_flag: cf("TAB_SWITCH") > 0,
         tab_switch_count: cf("TAB_SWITCH"),
-        time_away_exam_site: cf("WINDOW_BLUR"),
+        time_away_exam_site: timeAwaySeconds,
         answer_paste_flag: cf("PASTE_EVENT") > 0,
+        usb_device_detection: usbDetected,
         usb_device_detection_count: cf("USB_DETECTED"),
-        window_minimize_flag: cf("WINDOW_BLUR") > 0,
+        window_minimize_flag: windowMinimized,
         multi_device_login_flag: cf("MULTI_DEVICE") > 0,
         total_flags: s.behavioralFlags.length,
-        lastFlagAt: s.behavioralFlags.length > 0 ? s.behavioralFlags[s.behavioralFlags.length - 1].createdAt : null,
+        lastFlagAt: s.behavioralFlags.length > 0
+          ? s.behavioralFlags[s.behavioralFlags.length - 1].createdAt
+          : null,
         startedAt: s.startedAt,
       };
     });
@@ -479,7 +514,16 @@ async function getLiveSessions(req, res, next) {
     }
     if (gender) rows = rows.filter((r) => r.gender?.toLowerCase() === gender.toLowerCase());
 
-    res.json({ success: true, data: { exam, rows, polledAt: new Date().toISOString() } });
+    res.json({
+      success: true,
+      data: {
+        // Keep `exam` (singular) for backward-compat with old clients
+        exam: exams[0] ? { title: exams[0].title, courseCode: exams[0].courseCode } : null,
+        exams,
+        rows,
+        polledAt: new Date().toISOString(),
+      },
+    });
   } catch (err) {
     next(err);
   }

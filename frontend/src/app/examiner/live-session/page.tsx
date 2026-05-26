@@ -1,16 +1,18 @@
 "use client";
 
-import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "@/lib/api";
-import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/DashboardShell";
+import { DashboardShell, GlowButton } from "@/components/dashboard/DashboardShell";
 import type { Exam } from "@/types";
 
 /* ── Types ─────────────────────────────────────────────────── */
 interface LiveRow {
-  sessionId: string; studentDbId: string; studentName: string; studentUsername: string;
+  sessionId: string; examId: string; examTitle: string; examCourseCode: string;
+  studentDbId: string; studentName: string; studentUsername: string;
   gender: string; program: string; status: string;
+  submittedAt: string | null;
   tab_switch_flag: boolean; tab_switch_count: number; time_away_exam_site: number;
-  answer_paste_flag: boolean; usb_device_detection_count: number;
+  answer_paste_flag: boolean; usb_device_detection: boolean; usb_device_detection_count: number;
   window_minimize_flag: boolean; multi_device_login_flag: boolean;
   total_flags: number; lastFlagAt: string | null; startedAt: string;
 }
@@ -45,6 +47,10 @@ function fmtTime(iso: string) {
 function fmtDateTime(iso: string) {
   return new Date(iso).toLocaleString();
 }
+function fmtSubmittedAt(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString();
+}
 
 function downloadCSV(filename: string, headers: string[], rows: (string | number | boolean | null)[][]) {
   const esc = (v: string | number | boolean | null) => `"${String(v ?? "").replace(/"/g, '""')}"`;
@@ -54,16 +60,61 @@ function downloadCSV(filename: string, headers: string[], rows: (string | number
   const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
 }
 
-const CSV_HEADERS = ["Student Name", "Username", "Gender", "Program", "Status", "tab_switch_flag", "tab_switch_count", "time_away_exam_site", "answer_paste_flag", "usb_device_detection_count", "window_minimize_flag", "multi_device_login_flag", "Total Flags", "Last Flag At", "Started At"];
+/* ── Column definitions ────────────────────────────────────── */
+type SortDir = "asc" | "desc";
+interface SortState { key: string; dir: SortDir; }
+
+interface ColumnDef {
+  key: string;                              // sort key (must be a top-level field of LiveRow)
+  label: string;                            // header label
+  align?: "left" | "right" | "center";
+  // Optional getter for sorting — defaults to row[key]
+  getValue?: (r: LiveRow) => string | number | boolean | null;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: "examCourseCode", label: "EXAM" },
+  { key: "studentName",    label: "STUDENT NAME" },
+  { key: "status",         label: "STATUS" },
+  { key: "submittedAt",    label: "SUBMISSION TIME", getValue: (r) => r.submittedAt || "" },
+  { key: "tab_switch_flag",         label: "TAB SWITCH FLAG",            align: "center", getValue: (r) => (r.tab_switch_flag ? 1 : 0) },
+  { key: "tab_switch_count",        label: "TAB SWITCH COUNT",           align: "center" },
+  { key: "time_away_exam_site",     label: "TIME AWAY FROM EXAM SITE (s)", align: "center" },
+  { key: "answer_paste_flag",       label: "ANSWER PASTE FLAG",          align: "center", getValue: (r) => (r.answer_paste_flag ? 1 : 0) },
+  { key: "usb_device_detection",    label: "USB DEVICE DETECTION",       align: "center", getValue: (r) => (r.usb_device_detection ? 1 : 0) },
+  { key: "window_minimize_flag",    label: "WINDOW MINIMIZE FLAG",       align: "center", getValue: (r) => (r.window_minimize_flag ? 1 : 0) },
+  { key: "multi_device_login_flag", label: "MULTI DEVICE LOGIN FLAG",    align: "center", getValue: (r) => (r.multi_device_login_flag ? 1 : 0) },
+];
+
+const CSV_HEADERS = [
+  "Exam", "Course Code", "Student Name", "Username", "Gender", "Program",
+  "Status", "Submission Time",
+  "Tab Switch Flag", "Tab Switch Count", "Time Away From Exam Site (s)",
+  "Answer Paste Flag", "USB Device Detection",
+  "Window Minimize Flag", "Multi Device Login Flag",
+  "Total Flags", "Last Flag At", "Started At",
+];
 function rowToCSV(r: LiveRow) {
-  return [r.studentName, r.studentUsername, r.gender, r.program, r.status, r.tab_switch_flag ? "Yes" : "No", r.tab_switch_count, r.time_away_exam_site, r.answer_paste_flag ? "Yes" : "No", r.usb_device_detection_count, r.window_minimize_flag ? "Yes" : "No", r.multi_device_login_flag ? "Yes" : "No", r.total_flags, r.lastFlagAt ?? "", r.startedAt];
+  return [
+    r.examTitle, r.examCourseCode,
+    r.studentName, r.studentUsername, r.gender, r.program,
+    r.status, fmtSubmittedAt(r.submittedAt),
+    r.tab_switch_flag ? "Yes" : "No", r.tab_switch_count, r.time_away_exam_site,
+    r.answer_paste_flag ? "Yes" : "No",
+    r.usb_device_detection ? "Yes" : "No",
+    r.window_minimize_flag ? "Yes" : "No",
+    r.multi_device_login_flag ? "Yes" : "No",
+    r.total_flags, r.lastFlagAt ?? "", r.startedAt,
+  ];
 }
 
 /* ══════════════════════════════════════════════════════════════ */
 export default function LiveSessionPage() {
   const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState("");
-  const [examInfo, setExamInfo] = useState<{ title: string; courseCode: string } | null>(null);
+  // Multi-exam selection
+  const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
+  const [examInfos, setExamInfos] = useState<{ id: string; title: string; courseCode: string }[]>([]);
+
   const [rows, setRows] = useState<LiveRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [polling, setPolling] = useState(false);
@@ -77,14 +128,15 @@ export default function LiveSessionPage() {
   // Row selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // Sort
+  const [sort, setSort] = useState<SortState>({ key: "startedAt", dir: "desc" });
+
   // New-flag highlights
   const [highlighted, setHighlighted] = useState<Set<string>>(new Set());
   const prevCounts = useRef<Record<string, number>>({});
 
   // Deeper insight mode
   const [deepMode, setDeepMode] = useState(false);
-
-  // Deep log panel
   const [deepLog, setDeepLog] = useState<DeepLog | null>(null);
   const [deepLogLoading, setDeepLogLoading] = useState(false);
   const [deepLogOpen, setDeepLogOpen] = useState(false);
@@ -95,30 +147,27 @@ export default function LiveSessionPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
 
-  // Saved snapshot (for download after exam ends)
-  const [snapshot, setSnapshot] = useState<LiveRow[] | null>(null);
-
   useEffect(() => {
     api.get("/exams").then(({ data }) => setExams(data.data || [])).catch(() => {});
   }, []);
 
-  // Live polling
+  /* ── Live polling ───────────────────────────────────────── */
   useEffect(() => {
-    if (!selectedExamId) return;
+    if (selectedExamIds.length === 0) { setRows([]); setExamInfos([]); return; }
     let active = true;
     async function poll() {
       try {
         setPolling(true);
-        const params = new URLSearchParams({ examId: selectedExamId });
+        const params = new URLSearchParams({ examId: selectedExamIds.join(",") });
         if (search) params.set("search", search);
         if (genderFilter) params.set("gender", genderFilter);
         const { data } = await api.get(`/integrity/live-sessions?${params}`);
         if (!active) return;
         const newRows: LiveRow[] = data.data.rows;
-        setExamInfo(data.data.exam);
+        setExamInfos(data.data.exams || []);
         setPolledAt(data.data.polledAt);
 
-        // Detect newly flagged students
+        // Highlight rows whose total_flags increased since the last poll
         const newHighlights = new Set<string>();
         newRows.forEach((r) => {
           const prev = prevCounts.current[r.sessionId];
@@ -131,6 +180,7 @@ export default function LiveSessionPage() {
         }
         setRows(newRows);
         setError("");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (e: any) {
         if (active) setError(e.response?.data?.error?.message || "Failed to fetch session data");
       } finally {
@@ -141,25 +191,73 @@ export default function LiveSessionPage() {
     poll().finally(() => setLoading(false));
     const timer = setInterval(poll, 5000);
     return () => { active = false; clearInterval(timer); };
-  }, [selectedExamId, search, genderFilter]);
+  }, [selectedExamIds, search, genderFilter]);
+
+  /* ── Sorted view ────────────────────────────────────────── */
+  const sortedRows = useMemo(() => {
+    const col = COLUMNS.find((c) => c.key === sort.key);
+    const get = col?.getValue ?? ((r: LiveRow) => (r as unknown as Record<string, string | number | boolean | null>)[sort.key]);
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      if (va === null || va === undefined) return 1;
+      if (vb === null || vb === undefined) return -1;
+      if (typeof va === "number" && typeof vb === "number") return sort.dir === "asc" ? va - vb : vb - va;
+      const sa = String(va).toLowerCase();
+      const sb = String(vb).toLowerCase();
+      return sort.dir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
+    });
+    return copy;
+  }, [rows, sort]);
+
+  function toggleSort(key: string) {
+    setSort((prev) => {
+      if (prev.key === key) return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return { key, dir: "asc" };
+    });
+  }
 
   function toggleSelect(id: string) {
-    setSelected((prev) => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+    setSelected((prev) => {
+      const s = new Set(prev);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return s;
+    });
   }
   function toggleAll() {
-    if (selected.size === rows.length) setSelected(new Set());
-    else setSelected(new Set(rows.map((r) => r.sessionId)));
+    if (selected.size === sortedRows.length) setSelected(new Set());
+    else setSelected(new Set(sortedRows.map((r) => r.sessionId)));
+  }
+
+  function toggleExam(id: string) {
+    setSelectedExamIds((prev) => {
+      const has = prev.includes(id);
+      const next = has ? prev.filter((x) => x !== id) : [...prev, id];
+      prevCounts.current = {};
+      setRows([]);
+      return next;
+    });
+  }
+  function selectAllExams() {
+    setSelectedExamIds(exams.map((e) => e.id));
+    prevCounts.current = {};
+  }
+  function clearExams() {
+    setSelectedExamIds([]);
+    prevCounts.current = {};
   }
 
   function handleDownload(all: boolean) {
-    const target = all ? rows : rows.filter((r) => selected.has(r.sessionId));
+    const target = all ? sortedRows : sortedRows.filter((r) => selected.has(r.sessionId));
     if (!target.length) return;
-    downloadCSV(`live_session_${examInfo?.courseCode || "exam"}.csv`, CSV_HEADERS, target.map(rowToCSV));
+    const label = examInfos.length === 1 ? examInfos[0].courseCode : `multi_${examInfos.length}_exams`;
+    downloadCSV(`live_session_${label}.csv`, CSV_HEADERS, target.map(rowToCSV));
   }
 
   function handleSaveSnapshot() {
-    setSnapshot([...rows]);
-    downloadCSV(`snapshot_${examInfo?.courseCode || "exam"}_${Date.now()}.csv`, CSV_HEADERS, rows.map(rowToCSV));
+    const label = examInfos.length === 1 ? examInfos[0].courseCode : `multi_${examInfos.length}_exams`;
+    downloadCSV(`snapshot_${label}_${Date.now()}.csv`, CSV_HEADERS, sortedRows.map(rowToCSV));
   }
 
   async function openDeepLog(sessionId: string) {
@@ -167,17 +265,28 @@ export default function LiveSessionPage() {
     try {
       const { data } = await api.get(`/integrity/live-sessions/${sessionId}/deep-log`);
       setDeepLog(data.data);
-    } catch (e: any) { setDeepLog(null); } finally { setDeepLogLoading(false); }
+    } catch {
+      setDeepLog(null);
+    } finally {
+      setDeepLogLoading(false);
+    }
   }
 
   async function handleDelete() {
-    if (!selectedExamId || !deletePassword) return;
+    if (selectedExamIds.length === 0 || !deletePassword) return;
     setDeleting(true); setDeleteError("");
     try {
-      await api.delete("/integrity/live-sessions", { data: { examId: selectedExamId, password: deletePassword } });
-      setRows([]); setSnapshot(null); setShowDelete(false); setDeletePassword("");
-    } catch (e: any) { setDeleteError(e.response?.data?.error?.message || "Deletion failed"); }
-    finally { setDeleting(false); }
+      // Delete for each selected exam
+      for (const id of selectedExamIds) {
+        await api.delete("/integrity/live-sessions", { data: { examId: id, password: deletePassword } });
+      }
+      setRows([]); setShowDelete(false); setDeletePassword("");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (e: any) {
+      setDeleteError(e.response?.data?.error?.message || "Deletion failed");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function downloadDeepLog() {
@@ -187,38 +296,79 @@ export default function LiveSessionPage() {
     downloadCSV(`deep_log_${deepLog.student.name.replace(/ /g, "_")}.csv`, headers, logRows);
   }
 
-  const live = rows.filter((r) => r.status === "IN_PROGRESS").length;
-  const flagged = rows.filter((r) => r.total_flags > 0).length;
+  const live = sortedRows.filter((r) => r.status === "IN_PROGRESS").length;
+  const flagged = sortedRows.filter((r) => r.total_flags > 0).length;
+  const monitoringCount = selectedExamIds.length;
 
   return (
     <DashboardShell>
       <div className="flex gap-5 min-h-[80vh]">
         {/* ── Left sidebar ───────────────────────────────── */}
-        <aside className="w-64 shrink-0">
+        <aside className="w-72 shrink-0">
           <div className="sticky top-6 rounded-xl border border-white/5 bg-slate-950/70 p-5 backdrop-blur-xl space-y-5">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span className={`h-2 w-2 rounded-full ${selectedExamId && !error ? "bg-emerald-400 animate-pulse" : "bg-white/20"}`} />
+                <span className={`h-2 w-2 rounded-full ${monitoringCount > 0 && !error ? "bg-emerald-400 animate-pulse" : "bg-white/20"}`} />
                 <h2 className="text-sm font-bold text-white">Live Session</h2>
               </div>
               <p className="text-[11px] leading-relaxed text-white/40">Track students live activities during exams</p>
             </div>
 
-            {/* Exam selector */}
+            {/* Multi-exam selector */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Exam</label>
-              <select className="auth-input h-10 w-full rounded-lg px-3 text-xs" value={selectedExamId} onChange={(e) => { setSelectedExamId(e.target.value); setRows([]); prevCounts.current = {}; }}>
-                <option value="" className="bg-slate-900">Select exam…</option>
-                {exams.map((e) => <option key={e.id} value={e.id} className="bg-slate-900">{e.title} ({e.courseCode})</option>)}
-              </select>
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                  Exams to monitor ({monitoringCount}/{exams.length})
+                </label>
+                <div className="flex gap-1">
+                  <button
+                    onClick={selectAllExams}
+                    className="text-[10px] text-indigo-300 hover:text-indigo-200"
+                    title="Select all exams"
+                  >All</button>
+                  <span className="text-[10px] text-white/20">·</span>
+                  <button
+                    onClick={clearExams}
+                    className="text-[10px] text-white/40 hover:text-white"
+                  >Clear</button>
+                </div>
+              </div>
+              <div className="max-h-56 overflow-y-auto rounded-lg border border-white/10 bg-white/[0.02] p-1.5">
+                {exams.length === 0 ? (
+                  <p className="px-2 py-1 text-[11px] text-white/30">No exams yet.</p>
+                ) : exams.map((e) => {
+                  const isChecked = selectedExamIds.includes(e.id);
+                  return (
+                    <label
+                      key={e.id}
+                      className={`flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-[11px] transition ${
+                        isChecked ? "bg-indigo-500/10" : "hover:bg-white/5"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleExam(e.id)}
+                        className="mt-0.5 accent-indigo-500"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-white">{e.title}</span>
+                        <span className="block text-[10px] text-white/40">{e.courseCode}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-white/30">
+                Tick multiple exams to monitor them simultaneously.
+              </p>
             </div>
 
             {/* Search */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Search Student</label>
               <div className="relative">
-                <Svg d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" size={13} />
-                <input className="auth-input h-10 w-full rounded-lg pl-8 pr-3 text-xs" placeholder="Name or username…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: "2rem" }} />
+                <input className="auth-input h-10 w-full rounded-lg px-3 text-xs" placeholder="Name or username…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: "2rem" }} />
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none">
                   <Svg d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" size={13} />
                 </span>
@@ -237,9 +387,9 @@ export default function LiveSessionPage() {
             </div>
 
             {/* Stats */}
-            {selectedExamId && rows.length > 0 && (
+            {monitoringCount > 0 && sortedRows.length > 0 && (
               <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3 space-y-2">
-                <div className="flex justify-between text-[10px]"><span className="text-white/40">Total Students</span><span className="font-bold text-white">{rows.length}</span></div>
+                <div className="flex justify-between text-[10px]"><span className="text-white/40">Total Students</span><span className="font-bold text-white">{sortedRows.length}</span></div>
                 <div className="flex justify-between text-[10px]"><span className="text-white/40">Live Now</span><span className="font-bold text-emerald-400">{live}</span></div>
                 <div className="flex justify-between text-[10px]"><span className="text-white/40">Flagged</span><span className={`font-bold ${flagged > 0 ? "text-rose-400" : "text-white/40"}`}>{flagged}</span></div>
                 {polledAt && <div className="text-[9px] text-white/20 pt-1 border-t border-white/5">Updated {fmtTime(polledAt)}</div>}
@@ -251,16 +401,16 @@ export default function LiveSessionPage() {
               <button onClick={() => setDeepMode(!deepMode)} className={`w-full rounded-lg border px-3 py-2 text-xs font-semibold transition ${deepMode ? "border-indigo-400/40 bg-indigo-500/15 text-indigo-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"}`}>
                 {deepMode ? "✓ Seek Deeper Insight" : "Seek Deeper Insight"}
               </button>
-              <button onClick={handleSaveSnapshot} disabled={!rows.length} className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-40">
+              <button onClick={handleSaveSnapshot} disabled={!sortedRows.length} className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-40">
                 Save & Download Session
               </button>
-              <button onClick={() => handleDownload(true)} disabled={!rows.length} className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-40">
+              <button onClick={() => handleDownload(true)} disabled={!sortedRows.length} className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-40">
                 Download All as CSV
               </button>
               <button onClick={() => handleDownload(false)} disabled={selected.size === 0} className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/70 transition hover:bg-white/10 disabled:opacity-40">
                 Download Selected ({selected.size})
               </button>
-              <button onClick={() => setShowDelete(true)} disabled={!selectedExamId || !rows.length} className="w-full rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs font-semibold text-rose-400 transition hover:bg-rose-500/10 disabled:opacity-40">
+              <button onClick={() => setShowDelete(true)} disabled={monitoringCount === 0 || !sortedRows.length} className="w-full rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs font-semibold text-rose-400 transition hover:bg-rose-500/10 disabled:opacity-40">
                 Delete Session Data
               </button>
             </div>
@@ -272,28 +422,34 @@ export default function LiveSessionPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-white">Live Session Monitor</h1>
-              {examInfo && <p className="text-sm text-white/40">{examInfo.title} · {examInfo.courseCode}</p>}
+              {examInfos.length > 0 && (
+                <p className="text-sm text-white/40">
+                  {examInfos.length === 1
+                    ? `${examInfos[0].title} · ${examInfos[0].courseCode}`
+                    : `Monitoring ${examInfos.length} exams simultaneously`}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2 text-xs text-white/40">
               {polling && <><span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> Polling</>}
-              {!selectedExamId && <span>Select an exam to begin monitoring</span>}
+              {monitoringCount === 0 && <span>Select one or more exams to begin monitoring</span>}
             </div>
           </div>
 
           {error && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div>}
 
-          {!selectedExamId ? (
+          {monitoringCount === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-2xl border border-white/5 bg-white/[0.02] py-32 text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white/5">
                 <Svg d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" size={28} />
               </div>
-              <p className="text-white/40 text-sm">Select an exam from the sidebar to start live monitoring</p>
+              <p className="text-white/40 text-sm">Tick one or more exams in the sidebar to start live monitoring</p>
             </div>
-          ) : loading && rows.length === 0 ? (
+          ) : loading && sortedRows.length === 0 ? (
             <div className="flex items-center justify-center py-32"><svg className="h-8 w-8 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" /><path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" /></svg></div>
-          ) : rows.length === 0 ? (
+          ) : sortedRows.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-2xl border border-white/5 bg-white/[0.02] py-24 text-center">
-              <p className="text-white/30 text-sm">No active sessions found for this exam.</p>
+              <p className="text-white/30 text-sm">No active sessions found for the selected exam(s).</p>
             </div>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-white/10">
@@ -301,37 +457,71 @@ export default function LiveSessionPage() {
                 <thead className="sticky top-0 z-10 bg-slate-950/95">
                   <tr>
                     <th className="border-b border-white/10 p-3 text-left">
-                      <input type="checkbox" checked={selected.size === rows.length && rows.length > 0} onChange={toggleAll} className="accent-indigo-500" />
+                      <input type="checkbox" checked={selected.size === sortedRows.length && sortedRows.length > 0} onChange={toggleAll} className="accent-indigo-500" />
                     </th>
-                    {["Student Name", "Status", "tab_switch_flag", "tab_switch_count", "time_away_exam_site", "answer_paste_flag", "usb_device_detection_count", "window_minimize_flag", "multi_device_login_flag"].map((h) => (
-                      <th key={h} className="border-b border-white/10 p-3 text-left font-semibold uppercase tracking-wider text-white/35">{h}</th>
-                    ))}
+                    {COLUMNS.map((c) => {
+                      const isActive = sort.key === c.key;
+                      return (
+                        <th
+                          key={c.key}
+                          onClick={() => toggleSort(c.key)}
+                          className={`cursor-pointer border-b border-white/10 p-3 ${c.align === "center" ? "text-center" : "text-left"} font-semibold uppercase tracking-wider transition select-none ${
+                            isActive ? "text-indigo-300" : "text-white/35 hover:text-white/60"
+                          }`}
+                          title="Click to sort"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            {c.label}
+                            <span className="text-[9px] opacity-60">
+                              {isActive ? (sort.dir === "asc" ? "▲" : "▼") : ""}
+                            </span>
+                          </span>
+                        </th>
+                      );
+                    })}
                     {deepMode && <th className="border-b border-white/10 p-3 text-left font-semibold uppercase tracking-wider text-indigo-400">Deeper Insight</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {sortedRows.map((r) => {
                     const isNew = highlighted.has(r.sessionId);
                     const isSel = selected.has(r.sessionId);
                     return (
                       <tr key={r.sessionId} className={`border-b border-white/5 transition-all duration-700 ${isNew ? "bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/20" : isSel ? "bg-white/[0.03]" : "hover:bg-white/[0.02]"}`}>
                         <td className="p-3"><input type="checkbox" checked={isSel} onChange={() => toggleSelect(r.sessionId)} className="accent-indigo-500" /></td>
+
+                        <td className="p-3">
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-white/90 truncate max-w-[140px]">{r.examCourseCode || "—"}</span>
+                            <span className="text-[10px] text-white/35 truncate max-w-[140px]">{r.examTitle}</span>
+                          </div>
+                        </td>
+
                         <td className="p-3">
                           <div className="flex flex-col">
                             <span className="font-semibold text-white">{r.studentName}</span>
                             <span className="text-[10px] text-white/35">{r.studentUsername}</span>
                           </div>
                         </td>
+
                         <td className="p-3">
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${r.status === "IN_PROGRESS" ? "bg-emerald-500/15 text-emerald-300" : r.status === "SUBMITTED" ? "bg-blue-500/15 text-blue-300" : "bg-white/5 text-white/30"}`}>{r.status}</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${r.status === "IN_PROGRESS" ? "bg-emerald-500/15 text-emerald-300" : r.status === "SUBMITTED" ? "bg-blue-500/15 text-blue-300" : "bg-white/5 text-white/30"}`}>
+                            {r.status.replace(/_/g, " ")}
+                          </span>
                         </td>
+
+                        <td className="p-3 text-white/70">
+                          <span className="text-[11px]">{fmtSubmittedAt(r.submittedAt)}</span>
+                        </td>
+
                         <BoolCell v={r.tab_switch_flag} />
                         <NumCell v={r.tab_switch_count} warn={3} critical={8} />
-                        <NumCell v={r.time_away_exam_site} warn={2} critical={5} />
+                        <NumCell v={r.time_away_exam_site} warn={10} critical={30} suffix="s" />
                         <BoolCell v={r.answer_paste_flag} />
-                        <NumCell v={r.usb_device_detection_count} warn={1} critical={2} />
+                        <BoolCell v={r.usb_device_detection} />
                         <BoolCell v={r.window_minimize_flag} />
                         <BoolCell v={r.multi_device_login_flag} />
+
                         {deepMode && (
                           <td className="p-3">
                             <button onClick={() => openDeepLog(r.sessionId)} className="text-indigo-400 underline underline-offset-2 hover:text-indigo-300 transition text-[11px] font-medium">
@@ -348,12 +538,12 @@ export default function LiveSessionPage() {
           )}
 
           {/* Legend */}
-          {rows.length > 0 && (
+          {sortedRows.length > 0 && (
             <div className="flex flex-wrap items-center gap-4 text-[10px] text-white/30">
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-indigo-400 animate-pulse" /> Row flashes blue when a new flag is detected</span>
-              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> Critical flag count</span>
-              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Warning flag count</span>
-              <span>Polls every 5 s</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> Critical value</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Warning value</span>
+              <span>Click any column header to sort · Polls every 5 s</span>
             </div>
           )}
         </div>
@@ -364,7 +554,6 @@ export default function LiveSessionPage() {
         <div className="fixed inset-0 z-50 flex">
           <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={() => setDeepLogOpen(false)} />
           <aside className="flex w-full max-w-lg flex-col bg-slate-900 shadow-2xl ring-1 ring-white/10 overflow-hidden">
-            {/* Header */}
             <div className="border-b border-white/10 p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -380,7 +569,6 @@ export default function LiveSessionPage() {
                   </button>
                 </div>
               </div>
-              {/* Summary row */}
               {deepLog && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {[
@@ -402,7 +590,6 @@ export default function LiveSessionPage() {
               )}
             </div>
 
-            {/* Log entries */}
             <div className="flex-1 overflow-y-auto p-4 space-y-1">
               {deepLogLoading && (
                 <div className="flex items-center justify-center py-20">
@@ -429,7 +616,6 @@ export default function LiveSessionPage() {
               ))}
             </div>
 
-            {/* Tracking note */}
             <div className="border-t border-white/5 p-4">
               <p className="text-[10px] text-white/20 leading-relaxed">
                 Tracked: copy/paste · right-click · developer tools · inactivity · tab changes · window focus · USB · multi-device · print-screen · rapid switching · external navigation · fullscreen exit · keyboard shortcuts
@@ -448,7 +634,12 @@ export default function LiveSessionPage() {
               <Svg d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" size={22} />
             </div>
             <h3 className="text-base font-bold text-white">Delete Session Data</h3>
-            <p className="mt-1 text-xs text-white/50">This will permanently delete all behavioral flag records for <span className="font-semibold text-white">{examInfo?.title}</span>. This cannot be undone.</p>
+            <p className="mt-1 text-xs text-white/50">
+              This will permanently delete all behavioral flag records for{" "}
+              <span className="font-semibold text-white">
+                {examInfos.length === 1 ? examInfos[0].title : `${examInfos.length} selected exams`}
+              </span>. This cannot be undone.
+            </p>
             <div className="mt-4 space-y-1.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Enter your password to confirm</label>
               <input type="password" className="auth-input h-11 w-full rounded-lg px-3 text-sm" placeholder="Your password…" value={deletePassword} onChange={(e: ChangeEvent<HTMLInputElement>) => setDeletePassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleDelete()} />
@@ -470,14 +661,18 @@ export default function LiveSessionPage() {
 /* ── Sub-components for table cells ─────────────────────────── */
 function BoolCell({ v }: { v: boolean }) {
   return (
-    <td className="p-3">
+    <td className="p-3 text-center">
       {v
-        ? <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">Yes</span>
-        : <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-white/25">No</span>}
+        ? <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">YES</span>
+        : <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-white/30">NO</span>}
     </td>
   );
 }
-function NumCell({ v, warn, critical }: { v: number; warn: number; critical: number }) {
+function NumCell({ v, warn, critical, suffix }: { v: number; warn: number; critical: number; suffix?: string }) {
   const color = v >= critical ? "text-rose-400 font-bold" : v >= warn ? "text-amber-400 font-semibold" : "text-white/40";
-  return <td className="p-3"><span className={`text-xs ${color}`}>{v}</span></td>;
+  return (
+    <td className="p-3 text-center">
+      <span className={`text-xs ${color}`}>{v}{suffix ? ` ${suffix}` : ""}</span>
+    </td>
+  );
 }
