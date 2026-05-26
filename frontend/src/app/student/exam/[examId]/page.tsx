@@ -108,22 +108,32 @@ export default function ExamTakingPage() {
     return () => clearInterval(id);
   }, [phase, exam?.geofenceEnabled, examId]);
 
-  /* ─── USB baseline scan (runs once when exam info is loaded) ── */
-  // Enumerate connected devices so we can show an advisory before the exam
-  // starts. Devices with deviceId === "default" or empty labels are almost
-  // always built-in; everything else is treated as a potential external device.
+  /* ─── USB advisory (always shown before exam starts) ──────── */
+  // Browser labels are EMPTY without camera/mic permission, so we cannot
+  // rely on filtering by label.  Instead we always show the advisory and
+  // report how many media devices are currently detected as context.
   useEffect(() => {
     if (phase !== "ready" && phase !== "password") return;
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-    navigator.mediaDevices.enumerateDevices().then((devs) => {
-      const external = devs
-        .filter((d) => d.deviceId && d.deviceId !== "default" && d.label)
-        .map((d) => ({ name: d.label, type: d.kind }));
-      if (external.length > 0) {
-        setUsbFoundDevices(external);
-        setUsbModalOpen(true);
+    const scan = async () => {
+      if (navigator.mediaDevices?.enumerateDevices) {
+        try {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          // Group by kind for a readable summary — labels may be blank
+          const grouped: Record<string, number> = {};
+          for (const d of devs) grouped[d.kind] = (grouped[d.kind] ?? 0) + 1;
+          const summary = Object.entries(grouped).map(([kind, n]) => ({
+            name: `${n} × ${kind}`,
+            type: kind,
+          }));
+          setUsbFoundDevices(summary);
+        } catch {
+          setUsbFoundDevices([]);
+        }
       }
-    }).catch(() => {});
+      // Always open the advisory so the student sees and acknowledges it
+      setUsbModalOpen(true);
+    };
+    scan();
   }, [phase]);
 
   /* ─── Phase 1: load exam info ─────────────────── */
@@ -409,23 +419,26 @@ export default function ExamTakingPage() {
                   <Icon d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" size={20} />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-amber-300">External Devices Detected</h3>
+                  <h3 className="font-semibold text-amber-300">USB Device Check Required</h3>
                   <p className="mt-1 text-xs text-white/60">
-                    The following devices were found connected to your computer. USB storage devices, external drives, and unauthorised peripherals are <span className="text-amber-300 font-medium">not permitted</span> during this exam.
+                    Before starting the exam, please disconnect all USB storage devices, external drives, and unauthorised peripherals. USB devices connected <span className="text-amber-300 font-medium">during</span> the exam will be flagged automatically.
                   </p>
                 </div>
               </div>
               {usbFoundDevices.length > 0 && (
-                <ul className="rounded-xl border border-white/5 bg-white/[0.03] divide-y divide-white/5 max-h-40 overflow-y-auto text-xs">
-                  {usbFoundDevices.map((d, i) => (
-                    <li key={i} className="flex items-center justify-between px-3 py-2">
-                      <span className="text-white/80 truncate">{d.name}</span>
-                      <span className="ml-2 shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-white/40">{d.type}</span>
-                    </li>
-                  ))}
-                </ul>
+                <div className="rounded-xl border border-white/5 bg-white/[0.03] p-3">
+                  <p className="text-[10px] text-white/40 mb-2 uppercase tracking-wide">Devices currently detected on your system</p>
+                  <ul className="space-y-1">
+                    {usbFoundDevices.map((d, i) => (
+                      <li key={i} className="flex items-center gap-2 text-xs">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                        <span className="text-white/70">{d.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
-              <p className="text-xs text-white/50">Please disconnect any USB storage devices, external hard drives, or flash drives before continuing. Built-in microphones and webcams are allowed.</p>
+              <p className="text-xs text-white/50">This is a routine check. Built-in microphones, speakers, and webcams are permitted. Please remove any USB flash drives or external hard drives before continuing.</p>
               <div className="flex gap-3 pt-1">
                 <button
                   onClick={() => {

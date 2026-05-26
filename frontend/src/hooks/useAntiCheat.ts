@@ -139,106 +139,99 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
 
     /* ── 4. USB / HID DEVICE DETECTION ────────────────────────────
      *
-     * Logic:
-     *   1. At exam start, enumerate and store the BASELINE device list.
-     *   2. On every subsequent check, compare against that baseline.
-     *   3. Only flag devices that are NEW (not in the baseline).
-     *   4. Track already-reported devices so the same plug-in is never
-     *      counted twice (no duplicates even if the event fires several
-     *      times for one physical connection).
-     *   5. Use event-driven `devicechange` where available; fall back to
-     *      polling every 8 seconds on older browsers.
-     *   6. WebUSB `connect` events also go through the same guard.
+     * Root problem: browsers only expose device labels and unique IDs
+     * AFTER the user grants camera/microphone permission.  Without
+     * permission all deviceId values are "" (empty string), making
+     * ID-based comparison useless.
      *
-     * Each flag carries a structured event log:
-     *   { event, timestamp, device_name, device_id, device_type, count }
+     * Solution: COUNT-BASED comparison.
+     *   1. At exam start, record the total number of connected media
+     *      devices as the baseline count (works without any permission).
+     *   2. On every `devicechange` event (or polling tick), re-enumerate
+     *      and compare TOTAL count vs the last known count.
+     *   3. If count INCREASES → one or more devices were just plugged in
+     *      → emit a USB_DETECTED flag.
+     *   4. prevCount is updated on every check so that each physical
+     *      plug-in is counted exactly once (even if the student unplugs
+     *      and re-plugs a different device).
+     *   5. Event-driven first; 8-second polling fallback for older browsers.
      * ────────────────────────────────────────────────────────────── */
 
-    interface UsbDeviceInfo {
-      device_id: string;
-      device_name: string;
-      device_type: string;
-    }
+    // -1 = not yet initialised; set to baseline count after first enumerate
+    let prevDeviceCount = -1;
 
-    // Set of device IDs present when the exam session started (safe, ignored)
-    const baselineIds = new Set<string>();
-    // Set of device IDs we have already emitted a flag for (no duplicates)
-    const reportedIds = new Set<string>();
-
-    // References kept for cleanup
+    // References kept so we can remove them in cleanup
     let deviceChangeFn: (() => Promise<void>) | null = null;
     let usbPollTimer: ReturnType<typeof setInterval> | null = null;
 
-    async function enumerateDevices(): Promise<UsbDeviceInfo[]> {
-      if (!navigator.mediaDevices?.enumerateDevices) return [];
+    // Returns per-kind breakdown + total so we can log something useful
+    async function getDeviceSnapshot(): Promise<{ total: number; kinds: Record<string, number> }> {
+      if (!navigator.mediaDevices?.enumerateDevices) return { total: 0, kinds: {} };
       try {
         const devs = await navigator.mediaDevices.enumerateDevices();
-        return devs.map((d) => ({
-          device_id: d.deviceId || `${d.kind}-${d.label || "unknown"}`,
-          device_name: d.label || `${d.kind} device`,
-          device_type: d.kind,  // "audioinput" | "audiooutput" | "videoinput"
-        }));
+        const kinds: Record<string, number> = {};
+        for (const d of devs) kinds[d.kind] = (kinds[d.kind] ?? 0) + 1;
+        return { total: devs.length, kinds };
       } catch {
-        return [];
+        return { total: 0, kinds: {} };
       }
     }
 
-    // Compares `current` list against baseline+reported; emits a flag for
-    // every genuinely new device that has never been reported before.
-    function processDevices(current: UsbDeviceInfo[]) {
-      for (const device of current) {
-        if (baselineIds.has(device.device_id)) continue; // existed at exam start
-        if (reportedIds.has(device.device_id)) continue; // already flagged
-        reportedIds.add(device.device_id);
-        flagCountRef.current.usb++;
-        reportFlag("USB_DETECTED", {
-          event: "USB_DEVICE_DETECTED",
-          timestamp: new Date().toISOString(),
-          device_name: device.device_name,
-          device_id: device.device_id,
-          device_type: device.device_type,
-          count: flagCountRef.current.usb,
-        });
+    // Called on every devicechange event or polling tick.
+    // Emits one flag per newly detected insertion above prevCount.
+    async function checkDeviceCount() {
+      const { total, kinds } = await getDeviceSnapshot();
+
+      if (prevDeviceCount >= 0 && total > prevDeviceCount) {
+        // Determine which kind of device increased (best-effort)
+        const kindLabel = Object.keys(kinds).find(
+          (k) => (kinds[k] ?? 0) > 0 && k !== "_total"
+        ) ?? "device";
+
+        const newOnes = total - prevDeviceCount;
+        for (let i = 0; i < newOnes; i++) {
+          flagCountRef.current.usb++;
+          reportFlag("USB_DETECTED", {
+            event: "USB_DEVICE_DETECTED",
+            timestamp: new Date().toISOString(),
+            device_name: `New ${kindLabel} connected`,
+            device_type: kindLabel,
+            device_count_before: prevDeviceCount,
+            device_count_after: total,
+            count: flagCountRef.current.usb,
+          });
+        }
       }
+
+      // Always advance prevCount so the next check compares against NOW
+      prevDeviceCount = total;
     }
 
-    // Async initialisation: capture baseline, then start monitoring
+    // Async init: establish baseline then wire up event/poll
     (async () => {
-      const initial = await enumerateDevices();
-      initial.forEach((d) => baselineIds.add(d.device_id));
+      const { total } = await getDeviceSnapshot();
+      prevDeviceCount = total; // baseline — devices present at exam start are safe
 
-      async function checkDevices() {
-        const current = await enumerateDevices();
-        processDevices(current);
-      }
-
-      deviceChangeFn = checkDevices;
+      deviceChangeFn = checkDeviceCount;
 
       if (navigator.mediaDevices?.addEventListener) {
-        // Event-driven path — fires as soon as a device is plugged in/out
-        navigator.mediaDevices.addEventListener("devicechange", checkDevices);
+        navigator.mediaDevices.addEventListener("devicechange", checkDeviceCount);
       } else {
-        // Fallback: low-frequency polling (no heavy background loop)
-        usbPollTimer = setInterval(checkDevices, 8_000);
+        // Fallback polling — 8 s is low enough to be useful, high enough to be cheap
+        usbPollTimer = setInterval(checkDeviceCount, 8_000);
       }
     })();
 
-    // 4b. WebUSB — catches USB peripherals that have been granted permission
-    //     (many lab/exam USB devices use WebUSB). Only NEW connections are
-    //     flagged; the initial getDevices() scan is intentionally skipped
-    //     so that devices already plugged in before the exam are not flagged.
+    // 4b. WebUSB — explicit connect event for any WebUSB-capable peripheral
+    //     (does NOT fire for standard USB storage drives — those need OS-level APIs)
     const usbApi = (navigator as Navigator & { usb?: USB }).usb;
     function onUsbConnect(event: Event) {
       const device = (event as USBConnectionEvent).device;
-      const id = `webusb-${device?.vendorId ?? 0}-${device?.productId ?? 0}`;
-      if (reportedIds.has(id)) return;
-      reportedIds.add(id);
       flagCountRef.current.usb++;
       reportFlag("USB_DETECTED", {
         event: "USB_DEVICE_DETECTED",
         timestamp: new Date().toISOString(),
         device_name: device?.productName || "USB Device",
-        device_id: id,
         device_type: "webusb",
         manufacturer: device?.manufacturerName,
         count: flagCountRef.current.usb,
@@ -255,16 +248,12 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     };
     const hidApi = (navigator as unknown as { hid?: WebHIDEventTarget }).hid;
     function onHidConnect(ev: Event) {
-      const d = (ev as unknown as { device?: { productId?: number; vendorId?: number; productName?: string } }).device;
-      const id = `webhid-${d?.vendorId ?? 0}-${d?.productId ?? 0}`;
-      if (reportedIds.has(id)) return;
-      reportedIds.add(id);
+      const d = (ev as unknown as { device?: { productName?: string } }).device;
       flagCountRef.current.usb++;
       reportFlag("USB_DETECTED", {
         event: "USB_DEVICE_DETECTED",
         timestamp: new Date().toISOString(),
         device_name: d?.productName || "HID Device",
-        device_id: id,
         device_type: "webhid",
         count: flagCountRef.current.usb,
       });
@@ -273,17 +262,13 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       hidApi.addEventListener("connect", onHidConnect);
     }
 
-    // 4d. Gamepads (USB game controllers)
+    // 4d. Gamepads (USB game controllers also register here)
     function onGamepadConnected(e: GamepadEvent) {
-      const id = `gamepad-${e.gamepad?.id || "unknown"}`;
-      if (reportedIds.has(id)) return;
-      reportedIds.add(id);
       flagCountRef.current.usb++;
       reportFlag("USB_DETECTED", {
         event: "USB_DEVICE_DETECTED",
         timestamp: new Date().toISOString(),
         device_name: e.gamepad?.id || "Gamepad",
-        device_id: id,
         device_type: "gamepad",
         count: flagCountRef.current.usb,
       });
