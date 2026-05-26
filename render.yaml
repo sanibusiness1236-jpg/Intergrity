@@ -1,0 +1,58 @@
+services:
+  # ── Backend API (Node / Express) ───────────────────────────────────────────
+  - type: web
+    name: integrity-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free                  # change to "starter" or higher for always-on
+    healthCheckPath: /health
+
+    envVars:
+      # ── Keep-alive: self-ping so the free tier never cold-starts ──────────
+      # Render injects the service's own public URL via the special
+      # fromService.property = "host" reference — no manual editing needed.
+      - key: PUBLIC_URL
+        value: https://integrity-backend.onrender.com
+        # ↑ Render will override this with the real host on first deploy via
+        #   the dashboard.  You can also change it to use the sync approach:
+        #   fromService:
+        #     name: integrity-backend
+        #     type: web
+        #     property: host
+
+      # ── Core settings ──────────────────────────────────────────────────────
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+
+      # ── Secrets — set the values in Render Dashboard → Environment ─────────
+      # (Leave these here; Render ignores blank values and lets you fill them
+      #  in the dashboard without touching this file.)
+      - key: DATABASE_URL
+        sync: false             # secret — enter value in dashboard
+      - key: DATABASE_URL_DIRECT
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_LOGO_BUCKET
+        value: institution-logos
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: CORS_ORIGIN
+        sync: false             # e.g. https://your-app.vercel.app
+      - key: ML_SERVICE_URL
+        sync: false             # e.g. https://YOUR-NAME-integrity-ml.hf.space
+      - key: HF_TOKEN
+        sync: false
