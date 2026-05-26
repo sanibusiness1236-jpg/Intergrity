@@ -97,6 +97,7 @@ model User {
   createdExams       Exam[]              @relation("ExamCreator")
   invigilatorReports InvigilatorReport[] @relation("ReportAuthor")
   invigilatedVenues  Venue[]             @relation("VenueInvigilator")
+  aiImportJobs       AIImportJob[]       @relation("AIJobCreator")
 
   @@map("users")
 }
@@ -139,6 +140,7 @@ model Exam {
   examSessions         ExamSession[]
   venues               Venue[]
   integrityPredictions IntegrityPrediction[]
+  aiImportJobs         AIImportJob[]
 
   @@map("exams")
 }
@@ -261,6 +263,23 @@ model IntegrityPrediction {
   createdAt   DateTime @default(now())
 
   @@map("integrity_predictions")
+}
+
+model AIImportJob {
+  id          String   @id @default(uuid())
+  examId      String
+  exam        Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User     @relation("AIJobCreator", fields: [createdById], references: [id])
+  status      String   @default("pending")   // pending | processing | done | error
+  fileType    String                          // pdf | docx | image
+  fileName    String
+  errorMsg    String?
+  questions   Json?                           // extracted questions array
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ai_import_jobs")
 }
 
 model InvigilatorReport {

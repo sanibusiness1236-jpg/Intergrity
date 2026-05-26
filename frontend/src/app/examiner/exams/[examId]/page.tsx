@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -39,6 +39,7 @@ const TABS = [
   { id: "questions", label: "Questions", icon: "M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" },
   { id: "settings", label: "Settings", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "location", label: "Set Location/Venue Boundary", icon: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z" },
+  { id: "ai-import", label: "AI Question Import", icon: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
   { id: "preview", label: "Preview", icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0zM2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" },
 ];
 
@@ -320,6 +321,9 @@ export default function ExamEditorPage() {
           )}
           {activeTab === "location" && (
             <GeofenceTab examId={exam.id} exam={exam} pushToast={pushToast} onSaved={loadExam} />
+          )}
+          {activeTab === "ai-import" && (
+            <AIImportTab examId={exam.id} onImported={loadExam} pushToast={pushToast} />
           )}
           {activeTab === "preview" && <PreviewTab exam={exam} questions={questions} />}
         </div>
@@ -1222,6 +1226,362 @@ function ToggleRow({ label, description, value, onChange }: {
       >
         <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${value ? "translate-x-5" : "translate-x-0.5"}`} />
       </button>
+    </div>
+  );
+}
+
+/* ============================================================ */
+/* AI Question Import Tab                                       */
+/* ============================================================ */
+
+interface AIQuestion {
+  question_text: string;
+  question_type: string;   // mcq | fill_in_blank | true_false | theory
+  options: string[];
+  answer: string;
+  marks: number;
+}
+
+function AIImportTab({
+  examId,
+  onImported,
+  pushToast,
+}: {
+  examId: string;
+  onImported: () => void;
+  pushToast: (type: "success" | "error" | "info", msg: string) => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<"idle" | "processing" | "done" | "error">("idle");
+  const [questions, setQuestions] = useState<AIQuestion[]>([]);
+  const [edited, setEdited] = useState<AIQuestion[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const [regenerating, setRegenerating] = useState<number | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Upload ──────────────────────────────────────────────────────────────────
+  async function handleUpload() {
+    if (!file) return;
+    setUploading(true);
+    setErrorMsg("");
+    setQuestions([]);
+    setEdited([]);
+    setSelected(new Set());
+    setJobStatus("processing");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const { data } = await api.post(`/ai-import/${examId}/upload`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setJobId(data.data.jobId);
+      startPolling(data.data.jobId);
+    } catch (err: any) {
+      setJobStatus("error");
+      setErrorMsg(err.response?.data?.error?.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // ── Poll job until done ─────────────────────────────────────────────────────
+  function startPolling(id: string) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/ai-import/job/${id}`);
+        const job = data.data;
+        if (job.status === "done") {
+          clearInterval(pollRef.current!);
+          const qs: AIQuestion[] = Array.isArray(job.questions) ? job.questions : [];
+          setQuestions(qs);
+          setEdited(qs.map((q) => ({ ...q })));
+          setSelected(new Set(qs.map((_, i) => i)));
+          setJobStatus("done");
+        } else if (job.status === "error") {
+          clearInterval(pollRef.current!);
+          setJobStatus("error");
+          setErrorMsg(job.errorMsg || "Extraction failed");
+        }
+      } catch { /* keep polling */ }
+    }, 3000);
+  }
+
+  // ── Edit a question field ───────────────────────────────────────────────────
+  function updateQ(i: number, field: keyof AIQuestion, value: unknown) {
+    setEdited((prev) => prev.map((q, idx) => idx === i ? { ...q, [field]: value } : q));
+  }
+  function updateOption(qi: number, oi: number, value: string) {
+    setEdited((prev) => prev.map((q, idx) => {
+      if (idx !== qi) return q;
+      const opts = [...(q.options || [])];
+      opts[oi] = value;
+      return { ...q, options: opts };
+    }));
+  }
+
+  // ── Regenerate ──────────────────────────────────────────────────────────────
+  async function handleRegenerate(i: number, mode: string) {
+    setRegenerating(i);
+    try {
+      const q = edited[i];
+      const { data } = await api.post("/ai-import/regenerate", {
+        question_text: q.question_text,
+        question_type: q.question_type,
+        options: q.options,
+        mode,
+      });
+      const newQ: AIQuestion = data.data?.question || data.data;
+      setEdited((prev) => prev.map((old, idx) => idx === i ? { ...old, ...newQ } : old));
+      pushToast("success", "Question regenerated.");
+    } catch {
+      pushToast("error", "Regeneration failed. Check ML service connection.");
+    } finally {
+      setRegenerating(null);
+    }
+  }
+
+  // ── Import selected questions into exam ─────────────────────────────────────
+  async function handleImport() {
+    const toImport = [...selected].map((i) => edited[i]);
+    if (!toImport.length) { pushToast("info", "Select at least one question."); return; }
+    setImporting(true);
+    try {
+      const mapType = (t: string) => {
+        const l = t.toLowerCase();
+        if (l.includes("mcq") || l.includes("multiple")) return "MCQ";
+        if (l.includes("fill")) return "FILL_IN_BLANK";
+        if (l.includes("true")) return "TRUE_FALSE";
+        return "FILL_IN_BLANK";
+      };
+      await Promise.all(
+        toImport.map((q) =>
+          api.post(`/questions/${examId}`, {
+            type: mapType(q.question_type),
+            text: q.question_text,
+            options: q.options?.length ? q.options : undefined,
+            correctAnswer: q.answer || (q.options?.[0] ?? ""),
+            marks: q.marks || 1,
+          })
+        )
+      );
+      pushToast("success", `${toImport.length} question(s) imported successfully!`);
+      onImported();
+      setQuestions([]);
+      setEdited([]);
+      setSelected(new Set());
+      setJobId(null);
+      setJobStatus("idle");
+      setFile(null);
+    } catch (err: any) {
+      pushToast("error", err.response?.data?.error?.message || "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const TYPE_LABELS: Record<string, string> = {
+    mcq: "MCQ", fill_in_blank: "Fill in Blank", true_false: "True / False", theory: "Theory",
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <GlowCard
+        title="AI Question Import + Regeneration"
+        description="Upload a PDF, Word document, or image of an exam paper. The AI will extract, structure, and let you review every question before importing."
+      >
+        <div className="space-y-4">
+          {/* File picker */}
+          <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+              Upload Exam File (PDF, DOC, DOCX, JPG, PNG — max 20 MB)
+            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex flex-1 cursor-pointer items-center gap-3 rounded-lg border border-dashed border-white/20 bg-white/[0.02] p-4 transition hover:border-indigo-400/40 hover:bg-indigo-500/5">
+                <svg viewBox="0 0 24 24" width={20} height={20} fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-indigo-400">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                </svg>
+                <span className="text-sm text-white/60">
+                  {file ? file.name : "Click to choose a file…"}
+                </span>
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                  className="hidden"
+                  onChange={(e) => { setFile(e.target.files?.[0] || null); setJobStatus("idle"); setQuestions([]); }}
+                />
+              </label>
+              <GlowButton
+                onClick={handleUpload}
+                disabled={!file || uploading || jobStatus === "processing"}
+              >
+                {uploading ? "Uploading…" : jobStatus === "processing" ? "Processing…" : "Extract Questions"}
+              </GlowButton>
+            </div>
+          </div>
+
+          {/* Status */}
+          {jobStatus === "processing" && (
+            <div className="flex items-center gap-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+              AI is extracting questions in the background. This usually takes 15–60 seconds…
+            </div>
+          )}
+          {jobStatus === "error" && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+              {errorMsg || "Extraction failed. Try a different file or check the ML service."}
+            </div>
+          )}
+          {jobStatus === "done" && questions.length === 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+              No questions found. Make sure your file contains numbered exam questions.
+            </div>
+          )}
+        </div>
+      </GlowCard>
+
+      {/* Review panel */}
+      {edited.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">{edited.length} question(s) extracted</p>
+              <p className="text-xs text-white/40">Review and edit before importing. Uncheck questions you don't want.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelected(selected.size === edited.length ? new Set() : new Set(edited.map((_, i) => i)))}
+                className="text-xs text-indigo-300 hover:text-indigo-200"
+              >
+                {selected.size === edited.length ? "Deselect all" : "Select all"}
+              </button>
+              <GlowButton onClick={handleImport} disabled={importing || selected.size === 0}>
+                {importing ? "Importing…" : `Import ${selected.size} Question${selected.size !== 1 ? "s" : ""}`}
+              </GlowButton>
+            </div>
+          </div>
+
+          {edited.map((q, i) => (
+            <div
+              key={i}
+              className={`rounded-xl border p-4 space-y-3 transition ${
+                selected.has(i) ? "border-indigo-500/30 bg-indigo-500/5" : "border-white/10 bg-white/[0.02] opacity-50"
+              }`}
+            >
+              {/* Header row */}
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={selected.has(i)}
+                  onChange={() => {
+                    const next = new Set(selected);
+                    next.has(i) ? next.delete(i) : next.add(i);
+                    setSelected(next);
+                  }}
+                  className="h-4 w-4 accent-indigo-500"
+                />
+                <span className="text-xs font-bold text-indigo-300">Q{i + 1}</span>
+
+                {/* Type selector */}
+                <select
+                  value={q.question_type}
+                  onChange={(e) => updateQ(i, "question_type", e.target.value)}
+                  className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white outline-none"
+                >
+                  {Object.entries(TYPE_LABELS).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
+                  ))}
+                </select>
+
+                {/* Marks */}
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-[10px] text-white/40">Marks</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={q.marks}
+                    onChange={(e) => updateQ(i, "marks", parseFloat(e.target.value) || 1)}
+                    className="w-16 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-white outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Question text */}
+              <textarea
+                rows={2}
+                value={q.question_text}
+                onChange={(e) => updateQ(i, "question_text", e.target.value)}
+                className="w-full resize-none rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white outline-none focus:border-indigo-500/50"
+                placeholder="Question text…"
+              />
+
+              {/* MCQ options */}
+              {q.question_type === "mcq" && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-white/40">Options</p>
+                  {(q.options?.length ? q.options : ["", "", "", ""]).map((opt, oi) => (
+                    <div key={oi} className="flex items-center gap-2">
+                      <span className="text-[11px] text-white/30 w-4">{String.fromCharCode(65 + oi)}.</span>
+                      <input
+                        type="text"
+                        value={opt}
+                        onChange={(e) => updateOption(i, oi, e.target.value)}
+                        className="flex-1 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500/40"
+                        placeholder={`Option ${String.fromCharCode(65 + oi)}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Answer */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-white/40 shrink-0">Answer</span>
+                <input
+                  type="text"
+                  value={q.answer}
+                  onChange={(e) => updateQ(i, "answer", e.target.value)}
+                  className="flex-1 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500/40"
+                  placeholder="Correct answer…"
+                />
+              </div>
+
+              {/* Regeneration actions */}
+              <div className="flex flex-wrap gap-2 pt-1 border-t border-white/5">
+                {[
+                  { mode: "similar",  label: "🔄 Similar" },
+                  { mode: "harder",   label: "💪 Harder" },
+                  { mode: "easier",   label: "🎯 Easier" },
+                ].map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={regenerating === i}
+                    onClick={() => handleRegenerate(i, mode)}
+                    className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/60 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-indigo-300 disabled:opacity-40"
+                  >
+                    {regenerating === i ? "…" : label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Bottom import button */}
+          <div className="flex justify-end pt-2">
+            <GlowButton onClick={handleImport} disabled={importing || selected.size === 0}>
+              {importing ? "Importing…" : `Import ${selected.size} Question${selected.size !== 1 ? "s" : ""} into Exam`}
+            </GlowButton>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

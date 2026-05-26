@@ -17,6 +17,7 @@ const integrityRoutes = require("./modules/integrity/integrity.routes");
 const analyticsRoutes = require("./modules/analytics/analytics.routes");
 const studentRoutes = require("./modules/students/student.routes");
 const userRoutes = require("./modules/users/user.routes");
+const aiImportRoutes = require("./modules/ai-import/aiImport.routes");
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.use("/api/integrity", integrityRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/ai-import", aiImportRoutes);
 
 app.use(errorHandler);
 
