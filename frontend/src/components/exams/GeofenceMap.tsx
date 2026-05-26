@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import "leaflet/dist/leaflet.css";
 
 export interface GeofenceData {
   lat: number;
@@ -95,12 +96,26 @@ export default function GeofenceMap({ initial, onChange }: Props) {
         onChange({ lat, lng, radius: radiusRef.current });
       });
 
+      // Force a reflow so tiles align even when the container was hidden
+      // (e.g. mounted inside a tab) at first render.
+      requestAnimationFrame(() => map.invalidateSize());
+      setTimeout(() => map.invalidateSize(), 250);
+
+      // Also re-flow whenever the container changes size
+      if (typeof ResizeObserver !== "undefined" && mapRef.current) {
+        const ro = new ResizeObserver(() => map.invalidateSize());
+        ro.observe(mapRef.current);
+        (map as any).__ro = ro;
+      }
+
       setReady(true);
     });
 
     return () => {
       cancelled = true;
-      mapInstanceRef.current?.remove();
+      const m = mapInstanceRef.current;
+      (m as any)?.__ro?.disconnect?.();
+      m?.remove();
       mapInstanceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -254,12 +269,27 @@ export default function GeofenceMap({ initial, onChange }: Props) {
         <p className="text-xs text-rose-400">{searchError}</p>
       )}
 
-      {/* Map container */}
+      {/* Map container — explicit height + Leaflet-safe img reset */}
       <div
         ref={mapRef}
-        className="h-72 w-full overflow-hidden rounded-xl border border-white/10"
-        style={{ minHeight: 288 }}
+        className="geofence-map-host h-96 w-full overflow-hidden rounded-xl border border-white/10"
+        style={{ minHeight: 384, position: "relative" }}
       />
+
+      {/* Local style to neutralise global img/max-width rules that break Leaflet tiles */}
+      <style jsx global>{`
+        .geofence-map-host .leaflet-tile,
+        .geofence-map-host .leaflet-marker-icon,
+        .geofence-map-host .leaflet-marker-shadow {
+          max-width: none !important;
+          max-height: none !important;
+        }
+        .geofence-map-host .leaflet-container {
+          background: #0f172a;
+          width: 100%;
+          height: 100%;
+        }
+      `}</style>
 
       {!ready && (
         <p className="text-center text-xs text-white/40">Loading map…</p>
