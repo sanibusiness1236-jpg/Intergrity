@@ -2,6 +2,7 @@
 
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "@/lib/api";
+import { connectSocket } from "@/lib/socket";
 import { DashboardShell, GlowButton } from "@/components/dashboard/DashboardShell";
 import type { Exam } from "@/types";
 
@@ -192,6 +193,82 @@ export default function LiveSessionPage() {
     const timer = setInterval(poll, 5000);
     return () => { active = false; clearInterval(timer); };
   }, [selectedExamIds, search, genderFilter]);
+
+  /* ── Real-time socket: instant flag updates ─────────────────
+   *
+   * Flow:
+   *   Exam starts → useAntiCheat hook emits flag:report via socket
+   *   → backend saves to DB → emits flag:new to exam:${examId} room
+   *   → this handler receives it and updates the row IMMEDIATELY
+   *     (no waiting for the next 5-second poll)
+   *
+   * The polling above stays as a reconciliation fallback in case a
+   * socket event is missed during a reconnect.
+   * ─────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    if (selectedExamIds.length === 0) return;
+
+    const socket = connectSocket();
+
+    // Join the examiner monitor room for every selected exam
+    selectedExamIds.forEach((id) => socket.emit("join:monitor", { examId: id }));
+
+    function onFlagNew(payload: {
+      sessionId: string;
+      flagType: string;
+      metadata?: Record<string, unknown>;
+      createdAt: string;
+    }) {
+      const { sessionId, flagType, metadata, createdAt } = payload;
+
+      setRows((prev) =>
+        prev.map((row) => {
+          if (row.sessionId !== sessionId) return row;
+
+          const updated = { ...row, total_flags: row.total_flags + 1, lastFlagAt: createdAt };
+
+          switch (flagType) {
+            case "USB_DETECTED":
+              updated.usb_device_detection = true;
+              updated.usb_device_detection_count = (row.usb_device_detection_count ?? 0) + 1;
+              break;
+            case "TAB_SWITCH":
+              updated.tab_switch_flag = true;
+              updated.tab_switch_count = (row.tab_switch_count ?? 0) + 1;
+              updated.time_away_exam_site =
+                (row.time_away_exam_site ?? 0) +
+                (typeof metadata?.seconds === "number" ? metadata.seconds : 0);
+              break;
+            case "PASTE_EVENT":
+              updated.answer_paste_flag = true;
+              break;
+            case "WINDOW_BLUR":
+              updated.window_minimize_flag = true;
+              break;
+            case "MULTI_DEVICE":
+              updated.multi_device_login_flag = true;
+              break;
+          }
+
+          // Flash-highlight this row so the examiner sees it change
+          setHighlighted((h) => {
+            const next = new Set(h);
+            next.add(sessionId);
+            setTimeout(() => setHighlighted((hh) => { const s = new Set(hh); s.delete(sessionId); return s; }), 3500);
+            return next;
+          });
+
+          return updated;
+        })
+      );
+    }
+
+    socket.on("flag:new", onFlagNew);
+
+    return () => {
+      socket.off("flag:new", onFlagNew);
+    };
+  }, [selectedExamIds]);
 
   /* ── Sorted view ────────────────────────────────────────── */
   const sortedRows = useMemo(() => {
