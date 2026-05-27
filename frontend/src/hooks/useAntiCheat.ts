@@ -163,35 +163,60 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
      * USB_DETECTED so the live monitor flips to YES.
      * ──────────────────────────────────────────────────────────── */
     // ── Drag-and-drop ────────────────────────────────────────────
-    // CRITICAL: the browser only fires "drop" if "dragover" calls
-    // e.preventDefault() on every cycle.  Without it the browser
-    // takes over (navigates to the dropped file URL) and drop never fires.
+    // For "drop" to fire on a page:
+    //   1. dragenter AND dragover MUST call preventDefault() — every tick.
+    //   2. dropEffect MUST NOT be "none" (Chrome silently cancels drop if so).
+    //
+    // We accept BOTH file drops and text drops so we can tell the examiner
+    // exactly what was dragged.  Drops are still cancelled at the end so
+    // the file/text is never actually inserted into the exam.
+
     function onDragOver(e: DragEvent) {
-      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
-        e.preventDefault();                     // marks page as valid drop target
-        e.dataTransfer.dropEffect = "none";     // "blocked" cursor (no copy/move)
-      }
+      e.preventDefault();                       // marks page as a valid drop target
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";  // any non-"none" value
     }
 
     function onDragEnter(e: DragEvent) {
-      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
-        e.preventDefault();
-      }
+      e.preventDefault();
     }
 
     function onDrop(e: DragEvent) {
-      e.preventDefault();                       // stop browser navigating to file
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-      flagCountRef.current.usb++;
-      reportFlag("USB_DETECTED", {
-        event: "USB_DEVICE_DETECTED",
-        timestamp: new Date().toISOString(),
-        device_name: `Dropped file: ${files[0].name}`,
-        device_type: "drag_drop_file",
-        file_count: files.length,
-        count: flagCountRef.current.usb,
-      });
+      e.preventDefault();                       // stop browser default (open/navigate)
+      const dt = e.dataTransfer;
+      if (!dt) return;
+
+      const files = dt.files;
+      const types = Array.from(dt.types ?? []);
+
+      if (files && files.length > 0) {
+        // ── FILE drop ──
+        flagCountRef.current.usb++;
+        reportFlag("USB_DETECTED", {
+          event: "USB_DEVICE_DETECTED",
+          timestamp: new Date().toISOString(),
+          item_kind: "file",
+          device_name: `Dropped file: ${files[0].name}`,
+          device_type: "drag_drop_file",
+          file_count: files.length,
+          file_names: Array.from(files).map((f) => f.name).slice(0, 5),
+          file_mime_types: Array.from(files).map((f) => f.type).slice(0, 5),
+          count: flagCountRef.current.usb,
+        });
+      } else if (types.some((t) => t.startsWith("text/") || t === "text")) {
+        // ── TEXT drop (selected text dragged from another window/tab) ──
+        const text = dt.getData("text/plain") || dt.getData("text/html") || dt.getData("text") || "";
+        flagCountRef.current.usb++;
+        reportFlag("USB_DETECTED", {
+          event: "USB_DEVICE_DETECTED",
+          timestamp: new Date().toISOString(),
+          item_kind: "text",
+          device_name: `Dropped text (${text.length} chars)`,
+          device_type: "drag_drop_file",
+          types,
+          content_preview: text.slice(0, 200),
+          count: flagCountRef.current.usb,
+        });
+      }
     }
 
     // ── File picker (input[type=file] change) ─────────────────────
