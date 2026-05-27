@@ -13,7 +13,11 @@ interface LiveRow {
   gender: string; program: string; status: string;
   submittedAt: string | null;
   tab_switch_flag: boolean; tab_switch_count: number; time_away_exam_site: number;
-  answer_paste_flag: boolean; usb_device_detection: boolean; usb_device_detection_count: number;
+  answer_paste_flag: boolean;
+  // ── File-usage detections (replaces the old USB column) ──
+  file_drop_flag: boolean; file_drop_count: number;
+  file_input_flag: boolean; file_input_count: number;
+  clipboard_file_flag: boolean; clipboard_file_count: number;
   window_minimize_flag: boolean; multi_device_login_flag: boolean;
   total_flags: number; lastFlagAt: string | null; startedAt: string;
 }
@@ -82,7 +86,10 @@ const COLUMNS: ColumnDef[] = [
   { key: "tab_switch_count",        label: "TAB SWITCH COUNT",           align: "center" },
   { key: "time_away_exam_site",     label: "TIME AWAY FROM EXAM SITE (s)", align: "center" },
   { key: "answer_paste_flag",       label: "ANSWER PASTE FLAG",          align: "center", getValue: (r) => (r.answer_paste_flag ? 1 : 0) },
-  { key: "usb_device_detection",    label: "USB DEVICE DETECTION",       align: "center", getValue: (r) => (r.usb_device_detection ? 1 : 0) },
+  // ── File-usage detections ──
+  { key: "file_drop_flag",          label: "dragenter / drop with files",       align: "center", getValue: (r) => (r.file_drop_flag ? 1 : 0) },
+  { key: "file_input_flag",         label: "change on <input type=\"file\">",   align: "center", getValue: (r) => (r.file_input_flag ? 1 : 0) },
+  { key: "clipboard_file_flag",     label: "Pasting file content from clipboard", align: "center", getValue: (r) => (r.clipboard_file_flag ? 1 : 0) },
   { key: "window_minimize_flag",    label: "WINDOW MINIMIZE FLAG",       align: "center", getValue: (r) => (r.window_minimize_flag ? 1 : 0) },
   { key: "multi_device_login_flag", label: "MULTI DEVICE LOGIN FLAG",    align: "center", getValue: (r) => (r.multi_device_login_flag ? 1 : 0) },
 ];
@@ -91,7 +98,10 @@ const CSV_HEADERS = [
   "Exam", "Course Code", "Student Name", "Username", "Gender", "Program",
   "Status", "Submission Time",
   "Tab Switch Flag", "Tab Switch Count", "Time Away From Exam Site (s)",
-  "Answer Paste Flag", "USB Device Detection",
+  "Answer Paste Flag",
+  "dragenter / drop with files",
+  "change on <input type=\"file\">",
+  "Pasting file content from clipboard",
   "Window Minimize Flag", "Multi Device Login Flag",
   "Total Flags", "Last Flag At", "Started At",
 ];
@@ -102,7 +112,9 @@ function rowToCSV(r: LiveRow) {
     r.status, fmtSubmittedAt(r.submittedAt),
     r.tab_switch_flag ? "Yes" : "No", r.tab_switch_count, r.time_away_exam_site,
     r.answer_paste_flag ? "Yes" : "No",
-    r.usb_device_detection ? "Yes" : "No",
+    r.file_drop_flag ? "Yes" : "No",
+    r.file_input_flag ? "Yes" : "No",
+    r.clipboard_file_flag ? "Yes" : "No",
     r.window_minimize_flag ? "Yes" : "No",
     r.multi_device_login_flag ? "Yes" : "No",
     r.total_flags, r.lastFlagAt ?? "", r.startedAt,
@@ -228,10 +240,22 @@ export default function LiveSessionPage() {
           const updated = { ...row, total_flags: row.total_flags + 1, lastFlagAt: createdAt };
 
           switch (flagType) {
-            case "USB_DETECTED":
-              updated.usb_device_detection = true;
-              updated.usb_device_detection_count = (row.usb_device_detection_count ?? 0) + 1;
+            case "USB_DETECTED": {
+              // Route to the right column based on device_type metadata
+              const deviceType = metadata?.device_type;
+              if (deviceType === "file_input") {
+                updated.file_input_flag = true;
+                updated.file_input_count = (row.file_input_count ?? 0) + 1;
+              } else if (deviceType === "clipboard_file") {
+                updated.clipboard_file_flag = true;
+                updated.clipboard_file_count = (row.clipboard_file_count ?? 0) + 1;
+              } else {
+                // drag_drop_file (default for legacy / unknown USB events)
+                updated.file_drop_flag = true;
+                updated.file_drop_count = (row.file_drop_count ?? 0) + 1;
+              }
               break;
+            }
             case "TAB_SWITCH":
               updated.tab_switch_flag = true;
               updated.tab_switch_count = (row.tab_switch_count ?? 0) + 1;
@@ -595,7 +619,9 @@ export default function LiveSessionPage() {
                         <NumCell v={r.tab_switch_count} warn={3} critical={8} />
                         <NumCell v={r.time_away_exam_site} warn={10} critical={30} suffix="s" />
                         <BoolCell v={r.answer_paste_flag} />
-                        <BoolCell v={r.usb_device_detection} />
+                        <BoolCell v={r.file_drop_flag} />
+                        <BoolCell v={r.file_input_flag} />
+                        <BoolCell v={r.clipboard_file_flag} />
                         <BoolCell v={r.window_minimize_flag} />
                         <BoolCell v={r.multi_device_login_flag} />
 

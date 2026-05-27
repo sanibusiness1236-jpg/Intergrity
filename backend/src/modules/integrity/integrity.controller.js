@@ -470,9 +470,17 @@ async function getLiveSessions(req, res, next) {
         return acc + s;
       }, 0);
 
-      // USB events from the client are rate-limited (one per 2 s) so any
-      // non-zero count means there really was a device-change burst.
-      const usbDetected = cf("USB_DETECTED") > 0;
+      // Split USB_DETECTED flags into the three concrete file-usage categories
+      // by inspecting metadata.device_type (set by the client hook).
+      // Older flags without a device_type are treated as legacy USB events
+      // and counted as drag/drop (best-effort).
+      const usbFlags = flagsOf("USB_DETECTED");
+      const fileDropFlags = usbFlags.filter((f) => {
+        const t = f.metadata?.device_type;
+        return t === "drag_drop_file" || t === undefined || t === null;
+      });
+      const fileInputFlags = usbFlags.filter((f) => f.metadata?.device_type === "file_input");
+      const clipboardFileFlags = usbFlags.filter((f) => f.metadata?.device_type === "clipboard_file");
 
       // Window minimize (WINDOW_BLUR) — distinct from tab switch.
       const windowMinimized = cf("WINDOW_BLUR") > 0;
@@ -494,8 +502,13 @@ async function getLiveSessions(req, res, next) {
         tab_switch_count: cf("TAB_SWITCH"),
         time_away_exam_site: timeAwaySeconds,
         answer_paste_flag: cf("PASTE_EVENT") > 0,
-        usb_device_detection: usbDetected,
-        usb_device_detection_count: cf("USB_DETECTED"),
+        // ── File-usage detections (replaces the old USB column) ──
+        file_drop_flag: fileDropFlags.length > 0,
+        file_drop_count: fileDropFlags.length,
+        file_input_flag: fileInputFlags.length > 0,
+        file_input_count: fileInputFlags.length,
+        clipboard_file_flag: clipboardFileFlags.length > 0,
+        clipboard_file_count: clipboardFileFlags.length,
         window_minimize_flag: windowMinimized,
         multi_device_login_flag: cf("MULTI_DEVICE") > 0,
         total_flags: s.behavioralFlags.length,
