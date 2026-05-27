@@ -35,6 +35,11 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
   const reportFlag = useCallback(
     (flagType: string, metadata?: Record<string, unknown>) => {
       const socket = getSocket();
+      if (!socket.connected) {
+        console.warn("[AntiCheat] socket not connected — attempting reconnect before flag emit");
+        socket.connect();
+      }
+      console.log("[AntiCheat] emit flag:", flagType, metadata);
       socket.emit("flag:report", { sessionId, flagType, metadata });
     },
     [sessionId],
@@ -183,29 +188,32 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     function onDrop(e: DragEvent) {
       e.preventDefault();                       // stop browser default (open/navigate)
       const dt = e.dataTransfer;
+      console.log("[AntiCheat] drop fired, dt:", dt?.types, "files:", dt?.files?.length);
       if (!dt) return;
 
-      const files = dt.files;
       const types = Array.from(dt.types ?? []);
+      const hasFiles = (dt.files && dt.files.length > 0) || types.includes("Files");
+      const hasText  = types.some((t) => t.startsWith("text/") || t === "text");
 
-      if (files && files.length > 0) {
+      flagCountRef.current.usb++;
+
+      if (hasFiles) {
         // ── FILE drop ──
-        flagCountRef.current.usb++;
+        const fileList = dt.files && dt.files.length > 0 ? Array.from(dt.files) : [];
         reportFlag("USB_DETECTED", {
           event: "USB_DEVICE_DETECTED",
           timestamp: new Date().toISOString(),
           item_kind: "file",
-          device_name: `Dropped file: ${files[0].name}`,
+          device_name: fileList.length > 0 ? `Dropped file: ${fileList[0].name}` : "File dropped",
           device_type: "drag_drop_file",
-          file_count: files.length,
-          file_names: Array.from(files).map((f) => f.name).slice(0, 5),
-          file_mime_types: Array.from(files).map((f) => f.type).slice(0, 5),
+          file_count: fileList.length,
+          file_names: fileList.map((f) => f.name).slice(0, 5),
+          file_mime_types: fileList.map((f) => f.type).slice(0, 5),
           count: flagCountRef.current.usb,
         });
-      } else if (types.some((t) => t.startsWith("text/") || t === "text")) {
-        // ── TEXT drop (selected text dragged from another window/tab) ──
+      } else if (hasText) {
+        // ── TEXT drop ──
         const text = dt.getData("text/plain") || dt.getData("text/html") || dt.getData("text") || "";
-        flagCountRef.current.usb++;
         reportFlag("USB_DETECTED", {
           event: "USB_DEVICE_DETECTED",
           timestamp: new Date().toISOString(),
@@ -214,6 +222,17 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
           device_type: "drag_drop_file",
           types,
           content_preview: text.slice(0, 200),
+          count: flagCountRef.current.usb,
+        });
+      } else {
+        // ── Unknown drop type — still flag it ──
+        reportFlag("USB_DETECTED", {
+          event: "USB_DEVICE_DETECTED",
+          timestamp: new Date().toISOString(),
+          item_kind: "unknown",
+          device_name: "Item dropped on exam window",
+          device_type: "drag_drop_file",
+          types,
           count: flagCountRef.current.usb,
         });
       }
