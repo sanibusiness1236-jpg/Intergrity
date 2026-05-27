@@ -127,14 +127,80 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       e.preventDefault();
       flagCountRef.current.paste++;
       const pasted = e.clipboardData?.getData("text") ?? "";
+
+      // If the clipboard contains FILES (e.g. files copied from a USB drive),
+      // that's a USB-storage usage signal — flag it as USB_DETECTED too.
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        flagCountRef.current.usb++;
+        reportFlag("USB_DETECTED", {
+          event: "USB_DEVICE_DETECTED",
+          timestamp: new Date().toISOString(),
+          device_name: `Pasted file: ${files[0].name}`,
+          device_type: "clipboard_file",
+          file_count: files.length,
+          count: flagCountRef.current.usb,
+        });
+      }
+
       reportFlag("PASTE_EVENT", {
         count: flagCountRef.current.paste,
         length: pasted.length,
+        file_count: files?.length ?? 0,
       });
     }
 
     function onContextMenu(e: MouseEvent) {
       e.preventDefault();
+    }
+
+    /* ── 3b. FILE-USAGE detection ─────────────────────────────────
+     *
+     * Browsers cannot see USB mass-storage plug-in events, but they
+     * CAN see when a file is dragged into or selected through the
+     * exam window — which is the only way a student could actually
+     * use a USB drive during an exam.  We treat those events as
+     * USB_DETECTED so the live monitor flips to YES.
+     * ──────────────────────────────────────────────────────────── */
+    function onDragEnter(e: DragEvent) {
+      // Only flag if files are being dragged (not text)
+      const types = e.dataTransfer?.types;
+      if (types && Array.from(types).includes("Files")) {
+        e.preventDefault();
+      }
+    }
+
+    function onDrop(e: DragEvent) {
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      e.preventDefault();
+      flagCountRef.current.usb++;
+      reportFlag("USB_DETECTED", {
+        event: "USB_DEVICE_DETECTED",
+        timestamp: new Date().toISOString(),
+        device_name: `Dropped file: ${files[0].name}`,
+        device_type: "drag_drop_file",
+        file_count: files.length,
+        count: flagCountRef.current.usb,
+      });
+    }
+
+    // File-input change events — fires whenever the student picks a file
+    // through any <input type="file"> element on the page.
+    function onFileChange(e: Event) {
+      const input = e.target as HTMLInputElement | null;
+      if (!input || input.type !== "file") return;
+      const files = input.files;
+      if (!files || files.length === 0) return;
+      flagCountRef.current.usb++;
+      reportFlag("USB_DETECTED", {
+        event: "USB_DEVICE_DETECTED",
+        timestamp: new Date().toISOString(),
+        device_name: `Selected file: ${files[0].name}`,
+        device_type: "file_input",
+        file_count: files.length,
+        count: flagCountRef.current.usb,
+      });
     }
 
     /* ── 4. USB / HID DEVICE DETECTION ────────────────────────────
@@ -281,6 +347,10 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     window.addEventListener("focus", onWindowFocus);
     document.addEventListener("paste", onPaste);
     document.addEventListener("contextmenu", onContextMenu);
+    // File-usage detection (drag-drop + file inputs)
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("drop", onDrop);
+    document.addEventListener("change", onFileChange, true);
 
     /* ── Cleanup ──────────────────────────────────────────────── */
     return () => {
@@ -290,6 +360,9 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       document.removeEventListener("paste", onPaste);
       document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("gamepadconnected", onGamepadConnected);
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("drop", onDrop);
+      document.removeEventListener("change", onFileChange, true);
 
       // Stop USB monitoring
       if (deviceChangeFn) {
