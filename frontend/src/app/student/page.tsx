@@ -63,8 +63,12 @@ export default function StudentDashboard() {
   const total = sessions.length;
   const submitted = sessions.filter((s) => s.status === "SUBMITTED").length;
   const inProgress = sessions.filter((s) => s.status === "IN_PROGRESS").length;
+  // Only include sessions where the examiner has released scores
   const averageScore = (() => {
-    const graded = sessions.filter((s) => s.score !== null && s.score !== undefined && s.maxScore);
+    const graded = sessions.filter(
+      (s) => s.score !== null && s.score !== undefined && s.maxScore &&
+             (s.exam as any)?.showScoreToStudents !== false
+    );
     if (graded.length === 0) return null;
     const avg = graded.reduce((sum, s) => sum + (s.score! / s.maxScore!) * 100, 0) / graded.length;
     return Math.round(avg);
@@ -237,13 +241,22 @@ export default function StudentDashboard() {
                         <p className="text-xs text-white/40">{s.exam?.courseCode}</p>
                       </div>
                       <div className="flex shrink-0 items-center gap-3">
-                        {s.score !== null && s.score !== undefined && s.maxScore && (
-                          <div className="text-right">
-                            <p className="text-xs text-white/40">Score</p>
-                            <p className="text-sm font-semibold text-white">
-                              {s.score}<span className="text-white/40">/{s.maxScore}</span>
-                            </p>
-                          </div>
+                        {/* Score — only shown when examiner has released results */}
+                        {s.status === "SUBMITTED" && (
+                          (s.score !== null && s.score !== undefined && s.maxScore)
+                            ? (
+                              <div className="text-right">
+                                <p className="text-xs text-white/40">Score</p>
+                                <p className="text-sm font-semibold text-white">
+                                  {s.score}<span className="text-white/40">/{s.maxScore}</span>
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="text-right">
+                                <p className="text-xs text-white/40">Score</p>
+                                <p className="text-xs text-white/30 italic">Pending release</p>
+                              </div>
+                            )
                         )}
                         <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${STATUS_TONE[s.status] || STATUS_TONE.NOT_STARTED}`}>
                           {s.status.replace(/_/g, " ")}

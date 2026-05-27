@@ -141,15 +141,18 @@ async function submitExam(req, res, next) {
     }
 
     const questionMap = new Map(session.exam.questions.map((q) => [q.id, q]));
+
+    // maxScore is the sum of marks for ALL questions on the exam —
+    // not just the ones the student answered.  A student who skips
+    // 2 of 4 questions still scores out of the full exam total.
+    const maxScore = session.exam.questions.reduce((sum, q) => sum + (q.marks || 0), 0);
     let totalScore = 0;
-    let maxScore = 0;
 
     const answerRecords = [];
     for (const ans of answers) {
       const question = questionMap.get(ans.questionId);
       if (!question) continue;
 
-      maxScore += question.marks;
       const { isCorrect, score } = gradeAnswer(question, ans.answer);
       totalScore += score;
 

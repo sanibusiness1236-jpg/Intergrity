@@ -41,13 +41,24 @@ async function getStudentExams(req, res, next) {
             endTime: true,
             maxAttempts: true,
             durationMinutes: true,
+            showScoreToStudents: true,   // needed to gate score display
           },
         },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    res.json({ success: true, data: sessions });
+    // Mask score and maxScore when the examiner has not released results.
+    // The fields are nulled out so the student dashboard treats them as
+    // "not yet available" without any client-side logic needed.
+    const data = sessions.map((s) => {
+      if (s.exam?.showScoreToStudents === false) {
+        return { ...s, score: null, maxScore: null };
+      }
+      return s;
+    });
+
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }
