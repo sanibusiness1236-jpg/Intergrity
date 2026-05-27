@@ -162,18 +162,27 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
      * use a USB drive during an exam.  We treat those events as
      * USB_DETECTED so the live monitor flips to YES.
      * ──────────────────────────────────────────────────────────── */
+    // ── Drag-and-drop ────────────────────────────────────────────
+    // CRITICAL: the browser only fires "drop" if "dragover" calls
+    // e.preventDefault() on every cycle.  Without it the browser
+    // takes over (navigates to the dropped file URL) and drop never fires.
+    function onDragOver(e: DragEvent) {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
+        e.preventDefault();                     // marks page as valid drop target
+        e.dataTransfer.dropEffect = "none";     // "blocked" cursor (no copy/move)
+      }
+    }
+
     function onDragEnter(e: DragEvent) {
-      // Only flag if files are being dragged (not text)
-      const types = e.dataTransfer?.types;
-      if (types && Array.from(types).includes("Files")) {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
         e.preventDefault();
       }
     }
 
     function onDrop(e: DragEvent) {
+      e.preventDefault();                       // stop browser navigating to file
       const files = e.dataTransfer?.files;
       if (!files || files.length === 0) return;
-      e.preventDefault();
       flagCountRef.current.usb++;
       reportFlag("USB_DETECTED", {
         event: "USB_DEVICE_DETECTED",
@@ -185,8 +194,9 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       });
     }
 
-    // File-input change events — fires whenever the student picks a file
-    // through any <input type="file"> element on the page.
+    // ── File picker (input[type=file] change) ─────────────────────
+    // The exam page injects a hidden file input with id="__ac_file_trap__".
+    // Any other file input that appears (e.g. via DevTools) is caught too.
     function onFileChange(e: Event) {
       const input = e.target as HTMLInputElement | null;
       if (!input || input.type !== "file") return;
@@ -196,11 +206,13 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       reportFlag("USB_DETECTED", {
         event: "USB_DEVICE_DETECTED",
         timestamp: new Date().toISOString(),
-        device_name: `Selected file: ${files[0].name}`,
+        device_name: `File selected: ${files[0].name}`,
         device_type: "file_input",
         file_count: files.length,
         count: flagCountRef.current.usb,
       });
+      // Reset so the same file can be re-selected and re-detected
+      input.value = "";
     }
 
     /* ── 4. USB / HID DEVICE DETECTION ────────────────────────────
@@ -348,6 +360,7 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
     document.addEventListener("paste", onPaste);
     document.addEventListener("contextmenu", onContextMenu);
     // File-usage detection (drag-drop + file inputs)
+    window.addEventListener("dragover", onDragOver);   // REQUIRED for drop to fire
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("drop", onDrop);
     document.addEventListener("change", onFileChange, true);
@@ -360,6 +373,7 @@ export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
       document.removeEventListener("paste", onPaste);
       document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("gamepadconnected", onGamepadConnected);
+      window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("dragenter", onDragEnter);
       window.removeEventListener("drop", onDrop);
       document.removeEventListener("change", onFileChange, true);

@@ -569,6 +569,22 @@ export default function ExamTakingPage() {
   /* ═══════════════════════════════════════════════ */
   return (
     <div ref={containerRef} className="relative flex h-screen flex-col overflow-hidden text-white">
+      {/*
+        Hidden file input — gives the anti-cheat hook a real DOM target for
+        "Opening the file picker" detection.  It is visually invisible and
+        positioned off-screen so students cannot accidentally interact with
+        it, but the browser's native file-open dialog (Ctrl+O, right-click
+        "Open file…", or DevTools injection) will still register a change
+        event that the hook catches.
+      */}
+      <input
+        id="__ac_file_trap__"
+        type="file"
+        multiple
+        aria-hidden
+        tabIndex={-1}
+        style={{ position: "fixed", top: -9999, left: -9999, opacity: 0, pointerEvents: "none", width: 1, height: 1 }}
+      />
       {/* Purple/indigo background — matches the rest of the portal */}
       <div aria-hidden className="pointer-events-none absolute inset-0 bg-slate-950" />
       <div
