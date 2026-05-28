@@ -1,6 +1,7 @@
 "use client";
 
 import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import api from "@/lib/api";
 import { connectSocket } from "@/lib/socket";
 import { DashboardShell, GlowButton } from "@/components/dashboard/DashboardShell";
@@ -8,15 +9,15 @@ import type { Exam } from "@/types";
 
 /* ── Types ─────────────────────────────────────────────────── */
 interface LiveRow {
-  sessionId: string; examId: string; examTitle: string; examCourseCode: string;
+  sessionId: string; examId: string; examTitle: string; examCourseName: string; examCourseCode: string; examType: string;
   studentDbId: string; studentName: string; studentUsername: string;
   gender: string; program: string; status: string;
   submittedAt: string | null;
+  venue: string;
+  exam_duration_ratio: number;
   tab_switch_flag: boolean; tab_switch_count: number; time_away_exam_site: number;
   answer_paste_flag: boolean;
-  // ── File-usage detections (replaces the old USB column) ──
   file_drop_flag: boolean; file_drop_count: number;
-  file_input_flag: boolean; file_input_count: number;
   clipboard_file_flag: boolean; clipboard_file_count: number;
   window_minimize_flag: boolean; multi_device_login_flag: boolean;
   total_flags: number; lastFlagAt: string | null; startedAt: string;
@@ -65,6 +66,13 @@ function downloadCSV(filename: string, headers: string[], rows: (string | number
   const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
 }
 
+function downloadExcel(filename: string, headers: string[], rows: (string | number | boolean | null)[][]) {
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Live Session");
+  XLSX.writeFile(wb, filename);
+}
+
 /* ── Column definitions ────────────────────────────────────── */
 type SortDir = "asc" | "desc";
 interface SortState { key: string; dir: SortDir; }
@@ -78,46 +86,51 @@ interface ColumnDef {
 }
 
 const COLUMNS: ColumnDef[] = [
-  { key: "examCourseCode", label: "EXAM" },
-  { key: "studentName",    label: "STUDENT NAME" },
-  { key: "status",         label: "STATUS" },
-  { key: "submittedAt",    label: "SUBMISSION TIME", getValue: (r) => r.submittedAt || "" },
-  { key: "tab_switch_flag",         label: "TAB SWITCH FLAG",            align: "center", getValue: (r) => (r.tab_switch_flag ? 1 : 0) },
-  { key: "tab_switch_count",        label: "TAB SWITCH COUNT",           align: "center" },
+  { key: "examCourseCode",          label: "EXAM" },
+  { key: "studentName",             label: "STUDENT NAME" },
+  { key: "status",                  label: "STATUS" },
+  { key: "submittedAt",             label: "SUBMISSION TIME",              getValue: (r) => r.submittedAt || "" },
+  { key: "venue",                   label: "VENUE" },
+  { key: "exam_duration_ratio",     label: "EXAM DURATION RATIO",          align: "center" },
+  { key: "tab_switch_flag",         label: "TAB SWITCH FLAG",              align: "center", getValue: (r) => (r.tab_switch_flag ? 1 : 0) },
+  { key: "tab_switch_count",        label: "TAB SWITCH COUNT",             align: "center" },
   { key: "time_away_exam_site",     label: "TIME AWAY FROM EXAM SITE (s)", align: "center" },
-  { key: "answer_paste_flag",       label: "ANSWER PASTE FLAG",          align: "center", getValue: (r) => (r.answer_paste_flag ? 1 : 0) },
-  // ── File-usage detections ──
-  { key: "file_drop_flag",          label: "Dragging a file onto the exam window", align: "center", getValue: (r) => (r.file_drop_flag ? 1 : 0) },
-  { key: "file_input_flag",         label: "Opening the file picker",              align: "center", getValue: (r) => (r.file_input_flag ? 1 : 0) },
-  { key: "clipboard_file_flag",     label: "Pasting file content from clipboard", align: "center", getValue: (r) => (r.clipboard_file_flag ? 1 : 0) },
-  { key: "window_minimize_flag",    label: "WINDOW MINIMIZE FLAG",       align: "center", getValue: (r) => (r.window_minimize_flag ? 1 : 0) },
-  { key: "multi_device_login_flag", label: "MULTI DEVICE LOGIN FLAG",    align: "center", getValue: (r) => (r.multi_device_login_flag ? 1 : 0) },
+  { key: "answer_paste_flag",       label: "ANSWER PASTE FLAG",            align: "center", getValue: (r) => (r.answer_paste_flag ? 1 : 0) },
+  { key: "file_drop_flag",          label: "DRAGGING FILE ONTO EXAM WINDOW", align: "center", getValue: (r) => (r.file_drop_flag ? 1 : 0) },
+  { key: "clipboard_file_flag",     label: "PASTING FILE FROM CLIPBOARD",  align: "center", getValue: (r) => (r.clipboard_file_flag ? 1 : 0) },
+  { key: "window_minimize_flag",    label: "WINDOW MINIMIZE FLAG",         align: "center", getValue: (r) => (r.window_minimize_flag ? 1 : 0) },
+  { key: "multi_device_login_flag", label: "MULTI DEVICE LOGIN FLAG",      align: "center", getValue: (r) => (r.multi_device_login_flag ? 1 : 0) },
 ];
 
-const CSV_HEADERS = [
-  "Exam", "Course Code", "Student Name", "Username", "Gender", "Program",
-  "Status", "Submission Time",
-  "Tab Switch Flag", "Tab Switch Count", "Time Away From Exam Site (s)",
-  "Answer Paste Flag",
-  "Dragging a file onto the exam window",
-  "Opening the file picker",
-  "Pasting file content from clipboard",
-  "Window Minimize Flag", "Multi Device Login Flag",
-  "Total Flags", "Last Flag At", "Started At",
+/* ── ML-ready export headers (underscores for Python ingestion) ── */
+const ML_HEADERS = [
+  "exam_type", "course_name", "course_code", "student_name", "username",
+  "gender", "programme", "submission_time",
+  "tab_switch_flag", "tab_switch_count", "time_away_from_exam_site",
+  "exam_duration_ratio", "window_blur", "answer_paste",
+  "dragging_file_over_exam_window", "multi_device_login",
+  "venue", "pasting_file_content_from_clipboard",
 ];
-function rowToCSV(r: LiveRow) {
+function rowToML(r: LiveRow) {
   return [
-    r.examTitle, r.examCourseCode,
-    r.studentName, r.studentUsername, r.gender, r.program,
-    r.status, fmtSubmittedAt(r.submittedAt),
-    r.tab_switch_flag ? "Yes" : "No", r.tab_switch_count, r.time_away_exam_site,
-    r.answer_paste_flag ? "Yes" : "No",
-    r.file_drop_flag ? "Yes" : "No",
-    r.file_input_flag ? "Yes" : "No",
-    r.clipboard_file_flag ? "Yes" : "No",
-    r.window_minimize_flag ? "Yes" : "No",
-    r.multi_device_login_flag ? "Yes" : "No",
-    r.total_flags, r.lastFlagAt ?? "", r.startedAt,
+    r.examType,        // exam_type
+    r.examCourseName,  // course_name
+    r.examCourseCode,  // course_code
+    r.studentName,     // student_name
+    r.studentUsername, // username
+    r.gender,          // gender
+    r.program,         // programme
+    fmtSubmittedAt(r.submittedAt), // submission_time
+    r.tab_switch_flag ? "Yes" : "No",  // tab_switch_flag
+    r.tab_switch_count,                // tab_switch_count
+    r.time_away_exam_site,             // time_away_from_exam_site
+    r.exam_duration_ratio,             // exam_duration_ratio
+    r.window_minimize_flag ? "Yes" : "No", // window_blur
+    r.answer_paste_flag ? "Yes" : "No",    // answer_paste
+    r.file_drop_flag ? "Yes" : "No",       // dragging_file_over_exam_window
+    r.multi_device_login_flag ? "Yes" : "No", // multi_device_login
+    r.venue,                               // venue
+    r.clipboard_file_flag ? "Yes" : "No", // pasting_file_content_from_clipboard
   ];
 }
 
@@ -159,6 +172,9 @@ export default function LiveSessionPage() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  // Download format modal
+  const [downloadModal, setDownloadModal] = useState<{ mode: "all" | "selected" | "snapshot" } | null>(null);
 
   useEffect(() => {
     api.get("/exams").then(({ data }) => setExams(data.data || [])).catch(() => {});
@@ -241,16 +257,12 @@ export default function LiveSessionPage() {
 
           switch (flagType) {
             case "USB_DETECTED": {
-              // Route to the right column based on device_type metadata
               const deviceType = metadata?.device_type;
-              if (deviceType === "file_input") {
-                updated.file_input_flag = true;
-                updated.file_input_count = (row.file_input_count ?? 0) + 1;
-              } else if (deviceType === "clipboard_file") {
+              if (deviceType === "clipboard_file") {
                 updated.clipboard_file_flag = true;
                 updated.clipboard_file_count = (row.clipboard_file_count ?? 0) + 1;
               } else {
-                // drag_drop_file (default for legacy / unknown USB events)
+                // drag_drop_file (or legacy / unknown USB events)
                 updated.file_drop_flag = true;
                 updated.file_drop_count = (row.file_drop_count ?? 0) + 1;
               }
@@ -349,16 +361,31 @@ export default function LiveSessionPage() {
     prevCounts.current = {};
   }
 
-  function handleDownload(all: boolean) {
-    const target = all ? sortedRows : sortedRows.filter((r) => selected.has(r.sessionId));
-    if (!target.length) return;
+  function doExport(mode: "all" | "selected" | "snapshot", format: "csv" | "excel") {
     const label = examInfos.length === 1 ? examInfos[0].courseCode : `multi_${examInfos.length}_exams`;
-    downloadCSV(`live_session_${label}.csv`, CSV_HEADERS, target.map(rowToCSV));
+    const prefix = mode === "snapshot" ? `snapshot_${label}_${Date.now()}` : `live_session_${label}`;
+    const target =
+      mode === "selected"
+        ? sortedRows.filter((r) => selected.has(r.sessionId))
+        : sortedRows;
+    if (!target.length) return;
+    if (format === "csv") {
+      downloadCSV(`${prefix}.csv`, ML_HEADERS, target.map(rowToML));
+    } else {
+      downloadExcel(`${prefix}.xlsx`, ML_HEADERS, target.map(rowToML));
+    }
+    setDownloadModal(null);
+  }
+
+  function handleDownload(all: boolean) {
+    if (!sortedRows.length) return;
+    if (!all && selected.size === 0) return;
+    setDownloadModal({ mode: all ? "all" : "selected" });
   }
 
   function handleSaveSnapshot() {
-    const label = examInfos.length === 1 ? examInfos[0].courseCode : `multi_${examInfos.length}_exams`;
-    downloadCSV(`snapshot_${label}_${Date.now()}.csv`, CSV_HEADERS, sortedRows.map(rowToCSV));
+    if (!sortedRows.length) return;
+    setDownloadModal({ mode: "snapshot" });
   }
 
   async function openDeepLog(sessionId: string) {
@@ -615,12 +642,19 @@ export default function LiveSessionPage() {
                           <span className="text-[11px]">{fmtSubmittedAt(r.submittedAt)}</span>
                         </td>
 
+                        <td className="p-3 text-white/70">
+                          <span className="text-[11px]">{r.venue || "—"}</span>
+                        </td>
+
+                        <td className="p-3 text-center text-white/70">
+                          <span className="text-[11px] font-mono">{r.exam_duration_ratio?.toFixed(4) ?? "—"}</span>
+                        </td>
+
                         <BoolCell v={r.tab_switch_flag} />
                         <NumCell v={r.tab_switch_count} warn={3} critical={8} />
                         <NumCell v={r.time_away_exam_site} warn={10} critical={30} suffix="s" />
                         <BoolCell v={r.answer_paste_flag} />
                         <BoolCell v={r.file_drop_flag} />
-                        <BoolCell v={r.file_input_flag} />
                         <BoolCell v={r.clipboard_file_flag} />
                         <BoolCell v={r.window_minimize_flag} />
                         <BoolCell v={r.multi_device_login_flag} />
@@ -754,6 +788,39 @@ export default function LiveSessionPage() {
                 {deleting ? "Deleting…" : "Delete Data"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Download Format Modal ─────────────────────────── */}
+      {downloadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setDownloadModal(null)} />
+          <div className="relative w-full max-w-xs rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+            <h3 className="mb-1 text-base font-bold text-white">Download Format</h3>
+            <p className="mb-5 text-xs text-white/40">
+              Choose a format. All headers use underscores for Python compatibility.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => doExport(downloadModal.mode, "csv")}
+                className="flex-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 py-3 text-sm font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
+              >
+                CSV
+              </button>
+              <button
+                onClick={() => doExport(downloadModal.mode, "excel")}
+                className="flex-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+              >
+                Excel (.xlsx)
+              </button>
+            </div>
+            <button
+              onClick={() => setDownloadModal(null)}
+              className="mt-3 w-full rounded-lg border border-white/10 py-2 text-xs text-white/40 hover:bg-white/5"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

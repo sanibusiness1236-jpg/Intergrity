@@ -439,7 +439,7 @@ async function getLiveSessions(req, res, next) {
 
     const exams = await prisma.exam.findMany({
       where: { id: { in: examIds }, createdById: req.user.id },
-      select: { id: true, title: true, courseCode: true },
+      select: { id: true, title: true, courseCode: true, courseName: true, examType: true, examTypeOther: true },
     });
     if (exams.length === 0) throw new AppError("Exam not found", 404);
 
@@ -452,8 +452,20 @@ async function getLiveSessions(req, res, next) {
           select: { id: true, firstName: true, lastName: true, email: true, studentId: true, gender: true, program: true },
         },
         behavioralFlags: { orderBy: { createdAt: "asc" } },
+        seatingAssignment: { include: { venue: { select: { id: true, name: true } } } },
       },
       orderBy: { startedAt: "desc" },
+    });
+
+    // Pre-compute total duration per exam (sum of all student durations in seconds).
+    // Used to calculate each student's exam_duration_ratio.
+    const now = new Date();
+    const examTotalDuration = {};
+    sessions.forEach((s) => {
+      const start = s.startedAt ? new Date(s.startedAt) : now;
+      const end = s.submittedAt ? new Date(s.submittedAt) : now;
+      const secs = Math.max(0, (end - start) / 1000);
+      examTotalDuration[s.examId] = (examTotalDuration[s.examId] || 0) + secs;
     });
 
     let rows = sessions.map((s) => {
@@ -486,11 +498,23 @@ async function getLiveSessions(req, res, next) {
       const windowMinimized = cf("WINDOW_BLUR") > 0;
 
       const e = examById[s.examId] || { id: s.examId, title: "", courseCode: "" };
+
+      // Per-student duration in seconds
+      const start = s.startedAt ? new Date(s.startedAt) : now;
+      const end = s.submittedAt ? new Date(s.submittedAt) : now;
+      const studentDuration = Math.max(0, (end - start) / 1000);
+      const totalDuration = examTotalDuration[s.examId] || 0;
+      const exam_duration_ratio = totalDuration > 0
+        ? Math.round((studentDuration / totalDuration) * 10000) / 10000
+        : 0;
+
       return {
         sessionId: s.id,
         examId: s.examId,
         examTitle: e.title,
+        examCourseName: e.courseName,
         examCourseCode: e.courseCode,
+        examType: e.examType === "OTHER" ? (e.examTypeOther || "OTHER") : (e.examType || ""),
         studentDbId: s.student.id,
         studentName: `${s.student.firstName} ${s.student.lastName}`,
         studentUsername: s.student.email?.split("@")[0] || s.student.studentId || s.student.id,
@@ -498,15 +522,15 @@ async function getLiveSessions(req, res, next) {
         program: s.student.program || "",
         status: s.status,
         submittedAt: s.submittedAt,
+        venue: s.seatingAssignment?.venue?.name || "",
+        exam_duration_ratio,
         tab_switch_flag: cf("TAB_SWITCH") > 0,
         tab_switch_count: cf("TAB_SWITCH"),
         time_away_exam_site: timeAwaySeconds,
         answer_paste_flag: cf("PASTE_EVENT") > 0,
-        // ── File-usage detections (replaces the old USB column) ──
+        // ── File-usage detections ──
         file_drop_flag: fileDropFlags.length > 0,
         file_drop_count: fileDropFlags.length,
-        file_input_flag: fileInputFlags.length > 0,
-        file_input_count: fileInputFlags.length,
         clipboard_file_flag: clipboardFileFlags.length > 0,
         clipboard_file_count: clipboardFileFlags.length,
         window_minimize_flag: windowMinimized,

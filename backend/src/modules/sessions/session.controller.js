@@ -7,7 +7,7 @@ const AUTOSAVE_TTL = 60 * 60 * 4; // 4 hours
 
 async function startSession(req, res, next) {
   try {
-    const { examId, password } = req.body;
+    const { examId, password, venueId } = req.body;
     const studentId = req.user.id;
 
     const exam = await prisma.exam.findUnique({ where: { id: examId } });
@@ -83,6 +83,22 @@ async function startSession(req, res, next) {
         attemptNumber: completedAttempts + 1,
       },
     });
+
+    // Record the student's chosen venue (if provided)
+    if (venueId) {
+      try {
+        const venue = await prisma.venue.findFirst({ where: { id: venueId, examId } });
+        if (venue) {
+          await prisma.seatingAssignment.upsert({
+            where: { sessionId: session.id },
+            create: { venueId, sessionId: session.id, seatX: 0, seatY: 0 },
+            update: { venueId },
+          });
+        }
+      } catch (_) {
+        // Non-fatal — venue assignment failure should not block exam start
+      }
+    }
 
     res.json({
       success: true,

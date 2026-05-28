@@ -18,4 +18,8 @@ router.put("/:id/geofence", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.sa
 router.get("/:id/geofence", uuidParam(), ctrl.getGeofence);
 router.post("/:id/geofence/validate", uuidParam(), ctrl.validateGeofence);
 
+// Venue management
+router.post("/:id/venues", authorize("EXAMINER", "ADMIN"), uuidParam(), ctrl.createVenue);
+router.delete("/venues/:venueId", authorize("EXAMINER", "ADMIN"), ctrl.deleteVenue);
+
 module.exports = router;

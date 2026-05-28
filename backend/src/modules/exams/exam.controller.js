@@ -417,4 +417,47 @@ async function publishExam(req, res, next) {
   }
 }
 
-module.exports = { createExam, getExams, getExam, updateExam, deleteExam, publishExam, saveGeofence, getGeofence, validateGeofence };
+/* ── Venue management ───────────────────────────────────────── */
+
+async function createVenue(req, res, next) {
+  try {
+    const exam = await prisma.exam.findUnique({ where: { id: req.params.id } });
+    if (!exam) throw new AppError("Exam not found", 404);
+    if (exam.createdById !== req.user.id && req.user.role !== "ADMIN") {
+      throw new AppError("Not authorised", 403);
+    }
+
+    const { name, capacity } = req.body;
+    if (!name || !name.trim()) throw new AppError("Venue name is required", 400);
+
+    const venue = await prisma.venue.create({
+      data: {
+        name: name.trim(),
+        capacity: parseInt(capacity, 10) || 0,
+        examId: exam.id,
+      },
+    });
+    res.status(201).json({ success: true, data: venue });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteVenue(req, res, next) {
+  try {
+    const venue = await prisma.venue.findUnique({
+      where: { id: req.params.venueId },
+      include: { exam: { select: { createdById: true } } },
+    });
+    if (!venue) throw new AppError("Venue not found", 404);
+    if (venue.exam.createdById !== req.user.id && req.user.role !== "ADMIN") {
+      throw new AppError("Not authorised", 403);
+    }
+    await prisma.venue.delete({ where: { id: req.params.venueId } });
+    res.json({ success: true, message: "Venue deleted" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { createExam, getExams, getExam, updateExam, deleteExam, publishExam, saveGeofence, getGeofence, validateGeofence, createVenue, deleteVenue };

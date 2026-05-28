@@ -14,7 +14,7 @@ import {
   QTYPE_ICON,
 } from "@/components/exams/QuestionEditor";
 import { BlockList } from "@/components/exams/blocks";
-import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark } from "@/types";
+import type { Exam, ExamType, GradeRange, Question, QuestionType, ScoreRemark, Venue } from "@/types";
 import type { GeofenceData, GeofenceZone } from "@/components/exams/GeofenceMap";
 
 const GeofenceMap = dynamic(() => import("@/components/exams/GeofenceMap"), { ssr: false });
@@ -574,6 +574,8 @@ function DetailsTab({ exam, onSave }: { exam: Exam; onSave: (data: Partial<Exam>
             Use <span className="text-white">Preview</span> before uploading to verify what students will see.
           </p>
         </GlowCard>
+
+        <VenueManagerCard examId={exam.id} initialVenues={exam.venues ?? []} />
       </div>
     </form>
   );
@@ -585,6 +587,119 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <dt className="text-xs uppercase tracking-wider text-white/40">{label}</dt>
       <dd className="text-white">{value}</dd>
     </div>
+  );
+}
+
+/* ── Venue Manager Card ──────────────────────────────────────── */
+function VenueManagerCard({ examId, initialVenues }: { examId: string; initialVenues: Venue[] }) {
+  const [venues, setVenues] = useState<Venue[]>(initialVenues);
+  const [newName, setNewName] = useState("");
+  const [newCapacity, setNewCapacity] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+
+  async function addVenue() {
+    if (!newName.trim()) return;
+    setAdding(true);
+    try {
+      const { data } = await api.post(`/exams/${examId}/venues`, {
+        name: newName.trim(),
+        capacity: parseInt(newCapacity, 10) || 0,
+      });
+      setVenues((v) => [...v, data.data]);
+      setNewName("");
+      setNewCapacity("");
+      setShowForm(false);
+    } catch {}
+    finally { setAdding(false); }
+  }
+
+  async function removeVenue(id: string) {
+    try {
+      await api.delete(`/exams/venues/${id}`);
+      setVenues((v) => v.filter((x) => x.id !== id));
+    } catch {}
+  }
+
+  return (
+    <GlowCard title="Exam Venues">
+      <div className="space-y-3">
+        <p className="text-[11px] text-white/40">
+          Students will pick one of these venues when starting the exam.
+        </p>
+
+        {venues.length === 0 && (
+          <p className="text-[11px] italic text-white/25">No venues added yet.</p>
+        )}
+
+        <ul className="space-y-1.5">
+          {venues.map((v) => (
+            <li key={v.id} className="flex items-center justify-between gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
+              <div className="min-w-0">
+                <span className="block truncate text-xs font-medium text-white">{v.name}</span>
+                {v.capacity > 0 && (
+                  <span className="text-[10px] text-white/35">Capacity: {v.capacity}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => removeVenue(v.id)}
+                className="shrink-0 rounded p-1 text-white/30 transition hover:bg-rose-500/10 hover:text-rose-400"
+                title="Remove venue"
+              >
+                <Icon d="M6 18L18 6M6 6l12 12" size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        {showForm ? (
+          <div className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <input
+              className="auth-input h-9 w-full rounded-lg px-3 text-xs"
+              placeholder="Venue name (e.g. Hall A, Lab 3)"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addVenue()}
+            />
+            <input
+              className="auth-input h-9 w-full rounded-lg px-3 text-xs"
+              placeholder="Capacity (optional)"
+              type="number"
+              min={0}
+              value={newCapacity}
+              onChange={(e) => setNewCapacity(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={addVenue}
+                disabled={adding || !newName.trim()}
+                className="flex-1 rounded-lg bg-indigo-600 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+              >
+                {adding ? "Adding…" : "Add Venue"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowForm(false); setNewName(""); setNewCapacity(""); }}
+                className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/50 hover:bg-white/5"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/10 py-2 text-xs text-white/40 transition hover:border-indigo-400/40 hover:text-indigo-300"
+          >
+            <Icon d="M12 4v16m8-8H4" size={12} />
+            Add Venue
+          </button>
+        )}
+      </div>
+    </GlowCard>
   );
 }
 

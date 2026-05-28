@@ -62,6 +62,7 @@ export interface Exam {
   createdById: string;
   institutionId: string;
   questions?: Question[];
+  venues?: Venue[];
   _count?: { questions: number; examSessions: number; submittedSessions: number };
 }
 

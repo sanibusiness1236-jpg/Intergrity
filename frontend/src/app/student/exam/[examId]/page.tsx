@@ -50,6 +50,9 @@ export default function ExamTakingPage() {
   const [reportError, setReportError] = useState("");
   const [reportedQuestionIds, setReportedQuestionIds] = useState<Set<string>>(new Set());
 
+  /* ── Venue selection ─── */
+  const [selectedVenueId, setSelectedVenueId] = useState<string>("");
+
   /* ── USB advisory ─── */
   const [usbModalOpen, setUsbModalOpen] = useState(false);
   const [usbConfirmed, setUsbConfirmed] = useState(false);
@@ -182,6 +185,7 @@ export default function ExamTakingPage() {
       const { data } = await api.post("/sessions/start", {
         examId,
         password: exam?.examPassword ? password : undefined,
+        venueId: selectedVenueId || undefined,
       });
       setSession(data.data.session);
       setAttemptInfo({
@@ -389,12 +393,34 @@ export default function ExamTakingPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 autoFocus
               />
+              {exam?.venues && exam.venues.length > 0 && (
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                    Select Your Venue <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={selectedVenueId}
+                    onChange={(e) => setSelectedVenueId(e.target.value)}
+                    className="auth-input h-11 w-full rounded-xl px-3 text-sm"
+                  >
+                    <option value="">— Choose a venue —</option>
+                    {exam.venues.map((v: { id: string; name: string; capacity: number }) => (
+                      <option key={v.id} value={v.id} className="bg-slate-900">
+                        {v.name}{v.capacity > 0 ? ` (capacity: ${v.capacity})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {(pwError || startError) && (
                 <p className="text-xs text-rose-400">{pwError || startError}</p>
               )}
               <button
                 type="submit"
-                disabled={phase === "session-starting"}
+                disabled={
+                  phase === "session-starting" ||
+                  (exam?.venues?.length > 0 && !selectedVenueId)
+                }
                 className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 py-3 text-sm font-semibold text-white transition hover:shadow-lg hover:shadow-purple-500/30 disabled:opacity-60"
               >
                 {phase === "session-starting" ? "Starting…" : "Start Exam"}
@@ -479,6 +505,27 @@ export default function ExamTakingPage() {
               <InfoRow label="Max Attempts" value={exam?.maxAttempts ?? 1} />
               {exam?.instructions && <InfoRow label="Instructions" value={exam.instructions} />}
             </div>
+            {/* Venue selection */}
+            {exam?.venues && exam.venues.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                  Select Your Exam Venue <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={selectedVenueId}
+                  onChange={(e) => setSelectedVenueId(e.target.value)}
+                  className="auth-input h-11 w-full rounded-xl px-3 text-sm"
+                >
+                  <option value="">— Choose a venue —</option>
+                  {exam.venues.map((v: { id: string; name: string; capacity: number }) => (
+                    <option key={v.id} value={v.id} className="bg-slate-900">
+                      {v.name}{v.capacity > 0 ? ` (capacity: ${v.capacity})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {/* USB confirmation checkbox */}
             <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.02] p-3 text-left hover:bg-white/[0.04] transition">
               <input
@@ -494,7 +541,11 @@ export default function ExamTakingPage() {
             {startError && <p className="text-xs text-rose-400">{startError}</p>}
             <button
               onClick={handleStartExam}
-              disabled={phase === "session-starting" || !usbConfirmed}
+              disabled={
+                phase === "session-starting" ||
+                !usbConfirmed ||
+                (exam?.venues?.length > 0 && !selectedVenueId)
+              }
               className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 py-3 text-sm font-semibold text-white transition hover:shadow-lg hover:shadow-purple-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {phase === "session-starting" ? "Starting exam…" : "Start Exam →"}
