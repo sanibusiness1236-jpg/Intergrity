@@ -457,15 +457,22 @@ async function getLiveSessions(req, res, next) {
       orderBy: { startedAt: "desc" },
     });
 
-    // Pre-compute total duration per exam (sum of all student durations in seconds).
-    // Used to calculate each student's exam_duration_ratio.
+    // Pre-compute average duration per exam so we can calculate each student's
+    // exam_duration_ratio = student_duration / avg_duration_for_that_exam.
     const now = new Date();
-    const examTotalDuration = {};
+    const examDurationSum = {};   // examId -> sum of seconds
+    const examDurationCount = {}; // examId -> number of students
     sessions.forEach((s) => {
       const start = s.startedAt ? new Date(s.startedAt) : now;
       const end = s.submittedAt ? new Date(s.submittedAt) : now;
       const secs = Math.max(0, (end - start) / 1000);
-      examTotalDuration[s.examId] = (examTotalDuration[s.examId] || 0) + secs;
+      examDurationSum[s.examId] = (examDurationSum[s.examId] || 0) + secs;
+      examDurationCount[s.examId] = (examDurationCount[s.examId] || 0) + 1;
+    });
+    // avg duration per exam
+    const examAvgDuration = {};
+    Object.keys(examDurationSum).forEach((id) => {
+      examAvgDuration[id] = examDurationSum[id] / examDurationCount[id];
     });
 
     let rows = sessions.map((s) => {
@@ -503,9 +510,10 @@ async function getLiveSessions(req, res, next) {
       const start = s.startedAt ? new Date(s.startedAt) : now;
       const end = s.submittedAt ? new Date(s.submittedAt) : now;
       const studentDuration = Math.max(0, (end - start) / 1000);
-      const totalDuration = examTotalDuration[s.examId] || 0;
-      const exam_duration_ratio = totalDuration > 0
-        ? Math.round((studentDuration / totalDuration) * 10000) / 10000
+      const avgDuration = examAvgDuration[s.examId] || 0;
+      // ratio = student_duration / avg_duration_of_all_students_for_that_exam
+      const exam_duration_ratio = avgDuration > 0
+        ? Math.round((studentDuration / avgDuration) * 10000) / 10000
         : 0;
 
       return {
