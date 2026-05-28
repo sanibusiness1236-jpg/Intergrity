@@ -306,6 +306,7 @@ export default function ExamEditorPage() {
               examId={exam.id}
               examStatus={exam.status}
               questions={questions}
+              onQuestionsChange={setQuestions}
               onChange={loadExam}
               pushToast={pushToast}
             />
@@ -711,11 +712,12 @@ interface QuestionsTabProps {
   examId: string;
   examStatus: string;
   questions: Question[];
+  onQuestionsChange: (qs: Question[]) => void;
   onChange: () => Promise<void>;
   pushToast: (type: Toast["type"], message: string) => void;
 }
 
-function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: QuestionsTabProps) {
+function QuestionsTab({ examId, examStatus, questions, onQuestionsChange, onChange, pushToast }: QuestionsTabProps) {
   const { addQuestion, updateQuestion, deleteQuestion } = useExamStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newQuestionType, setNewQuestionType] = useState<QuestionType | null>(null);
@@ -731,10 +733,11 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   async function handleCreate(payload: Partial<Question>) {
     setBusy(true);
     try {
-      await addQuestion(examId, payload);
+      const created = await addQuestion(examId, payload);
+      // Update list locally — no need for a full exam reload
+      onQuestionsChange([...questions, created]);
       setNewQuestionType(null);
       pushToast("success", "Question added");
-      await onChange();
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Failed to add question");
       throw e;
@@ -746,10 +749,10 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   async function handleUpdate(qid: string, payload: Partial<Question>) {
     setBusy(true);
     try {
-      await updateQuestion(qid, payload);
+      const updated = await updateQuestion(qid, payload);
+      onQuestionsChange(questions.map((q) => q.id === qid ? { ...q, ...updated } : q));
       setEditingId(null);
       pushToast("success", "Question updated");
-      await onChange();
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Update failed");
       throw e;
@@ -763,8 +766,8 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
     setBusy(true);
     try {
       await deleteQuestion(qid);
+      onQuestionsChange(questions.filter((q) => q.id !== qid));
       pushToast("success", "Question deleted");
-      await onChange();
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Delete failed");
     } finally {
@@ -775,15 +778,15 @@ function QuestionsTab({ examId, examStatus, questions, onChange, pushToast }: Qu
   async function handleDuplicate(q: Question) {
     setBusy(true);
     try {
-      await addQuestion(examId, {
+      const created = await addQuestion(examId, {
         type: q.type,
         text: q.text + " (copy)",
         options: q.options,
         correctAnswer: q.correctAnswer,
         marks: q.marks,
       });
+      onQuestionsChange([...questions, created]);
       pushToast("success", "Question duplicated");
-      await onChange();
     } catch (e: any) {
       pushToast("error", e.response?.data?.error?.message || "Duplicate failed");
     } finally {
@@ -980,10 +983,12 @@ function QuestionCard({
               </span>
             )}
           </div>
-          <div
-            className="qe-prose text-sm text-white"
-            dangerouslySetInnerHTML={{ __html: question.text || "" }}
-          />
+          {question.text && question.text !== "[block-based question]" && (
+            <div
+              className="qe-prose text-sm text-white"
+              dangerouslySetInnerHTML={{ __html: question.text }}
+            />
+          )}
 
           {Array.isArray(question.blocks) && question.blocks.length > 0 && (
             <div className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
@@ -2291,13 +2296,15 @@ function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) 
                     <span className="font-bold text-white">Question {i + 1}</span>
                     <span className="text-white/40">{q.marks} pt{q.marks !== 1 ? "s" : ""}</span>
                   </div>
-                  {q.type === "MULTI_BLANK_EQUATION" ? (
-                    <p className="mb-3 text-sm text-white">{q.text}</p>
-                  ) : (
-                    <div
-                      className="qe-prose mb-3 text-sm text-white"
-                      dangerouslySetInnerHTML={{ __html: q.text || "" }}
-                    />
+                  {q.text && q.text !== "[block-based question]" && (
+                    q.type === "MULTI_BLANK_EQUATION" ? (
+                      <p className="mb-3 text-sm text-white">{q.text}</p>
+                    ) : (
+                      <div
+                        className="qe-prose mb-3 text-sm text-white"
+                        dangerouslySetInnerHTML={{ __html: q.text }}
+                      />
+                    )
                   )}
 
                   {Array.isArray(q.blocks) && q.blocks.length > 0 && (

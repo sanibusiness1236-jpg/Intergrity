@@ -811,13 +811,16 @@ export default function ExamTakingPage() {
                 </div>
               </div>
 
-              {q.type === "MULTI_BLANK_EQUATION" ? (
-                <p className="mb-6 text-lg leading-relaxed text-white sm:text-xl">{q.text}</p>
-              ) : (
-                <div
-                  className="qe-prose mb-6 text-lg leading-relaxed text-white sm:text-xl"
-                  dangerouslySetInnerHTML={{ __html: q.text || "" }}
-                />
+              {/* Question text — hidden for pure block-based questions whose text is just a backend placeholder */}
+              {q.text && q.text !== "[block-based question]" && (
+                q.type === "MULTI_BLANK_EQUATION" ? (
+                  <p className="mb-6 text-lg leading-relaxed text-white sm:text-xl">{q.text}</p>
+                ) : (
+                  <div
+                    className="qe-prose mb-6 text-lg leading-relaxed text-white sm:text-xl"
+                    dangerouslySetInnerHTML={{ __html: q.text }}
+                  />
+                )
               )}
 
               {Array.isArray(q.blocks) && q.blocks.length > 0 && (

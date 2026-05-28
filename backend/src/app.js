@@ -51,9 +51,10 @@ app.get("/health", (_req, res) => {
 app.use("/api/auth", authRoutes);
 // Institution brand rarely changes — cache 60 s in the browser
 app.use("/api/institutions", cacheFor(60), institutionRoutes);
-// Exam list: 10 s cache so dashboards feel instant on re-visit
-app.use("/api/exams", cacheFor(10), examRoutes);
-app.use("/api/questions", questionRoutes);
+// Exam list/detail: 15 s cache so dashboards feel instant on re-visit
+app.use("/api/exams", cacheFor(15), examRoutes);
+// Questions are read-heavy and change infrequently — 15 s cache
+app.use("/api/questions", cacheFor(15), questionRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/invigilator", invigilatorRoutes);

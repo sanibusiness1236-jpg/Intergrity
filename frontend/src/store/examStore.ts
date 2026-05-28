@@ -80,10 +80,6 @@ export const useExamStore = create<ExamState>((set) => ({
 
   addQuestion: async (examId, question) => {
     const { data } = await api.post(`/questions/exam/${examId}`, question);
-    try {
-      const { data: list } = await api.get("/exams");
-      set({ exams: list.data });
-    } catch {}
     return data.data;
   },
 
@@ -94,10 +90,6 @@ export const useExamStore = create<ExamState>((set) => ({
 
   deleteQuestion: async (questionId) => {
     await api.delete(`/questions/${questionId}`);
-    try {
-      const { data: list } = await api.get("/exams");
-      set({ exams: list.data });
-    } catch {}
   },
 
   addBulkQuestions: async (examId, questions) => {

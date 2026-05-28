@@ -143,6 +143,9 @@ model Exam {
   integrityPredictions IntegrityPrediction[]
   aiImportJobs         AIImportJob[]
 
+  @@index([createdById])
+  @@index([institutionId])
+  @@index([status, isActive])
   @@map("exams")
 }
 
@@ -164,6 +167,8 @@ model Question {
 
   answers      Answer[]
 
+  @@index([examId])
+  @@index([examId, order])
   @@map("questions")
 }
 
@@ -219,6 +224,9 @@ model ExamSession {
   behavioralFlags BehavioralFlag[]
   seatingAssignment SeatingAssignment?
 
+  @@index([studentId])
+  @@index([examId])
+  @@index([examId, status])
   @@map("exam_sessions")
 }
 
@@ -235,6 +243,8 @@ model Answer {
   updatedAt  DateTime    @updatedAt
 
   @@unique([sessionId, questionId])
+  @@index([sessionId])
+  @@index([questionId])
   @@map("answers")
 }
 
@@ -248,6 +258,8 @@ model BehavioralFlag {
   metadata   Json?
   createdAt  DateTime    @default(now())
 
+  @@index([sessionId])
+  @@index([studentId])
   @@map("behavioral_flags")
 }
 

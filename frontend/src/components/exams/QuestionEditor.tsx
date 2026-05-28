@@ -105,11 +105,12 @@ export function formToPayload(form: QuestionFormValue): {
   error: string | null;
 } {
   const isMultiBlank = form.type === "MULTI_BLANK_EQUATION";
-  const textEmpty = isMultiBlank ? !form.text.trim() : isHtmlEmpty(form.text);
-  if (textEmpty) return { payload: null, error: "Question text is required" };
-  if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
-
   const blocks = form.blocks.length > 0 ? form.blocks : undefined;
+
+  // Text is only required when there are no blocks to carry the question content
+  const textEmpty = isMultiBlank ? !form.text.trim() : isHtmlEmpty(form.text);
+  if (textEmpty && !blocks) return { payload: null, error: "Question text is required (or add at least one content block)" };
+  if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
 
   if (form.type === "MCQ") {
     const opts = form.options.map((o) => o.trim()).filter(Boolean);
