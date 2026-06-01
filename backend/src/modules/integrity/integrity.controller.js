@@ -439,7 +439,7 @@ async function getLiveSessions(req, res, next) {
 
     const exams = await prisma.exam.findMany({
       where: { id: { in: examIds }, createdById: req.user.id },
-      select: { id: true, title: true, courseCode: true, courseName: true, examType: true, examTypeOther: true },
+      select: { id: true, title: true, courseCode: true, courseName: true, examType: true, examTypeOther: true, durationMinutes: true },
     });
     if (exams.length === 0) throw new AppError("Exam not found", 404);
 
@@ -457,23 +457,7 @@ async function getLiveSessions(req, res, next) {
       orderBy: { startedAt: "desc" },
     });
 
-    // Pre-compute average duration per exam so we can calculate each student's
-    // exam_duration_ratio = student_duration / avg_duration_for_that_exam.
     const now = new Date();
-    const examDurationSum = {};   // examId -> sum of seconds
-    const examDurationCount = {}; // examId -> number of students
-    sessions.forEach((s) => {
-      const start = s.startedAt ? new Date(s.startedAt) : now;
-      const end = s.submittedAt ? new Date(s.submittedAt) : now;
-      const secs = Math.max(0, (end - start) / 1000);
-      examDurationSum[s.examId] = (examDurationSum[s.examId] || 0) + secs;
-      examDurationCount[s.examId] = (examDurationCount[s.examId] || 0) + 1;
-    });
-    // avg duration per exam
-    const examAvgDuration = {};
-    Object.keys(examDurationSum).forEach((id) => {
-      examAvgDuration[id] = examDurationSum[id] / examDurationCount[id];
-    });
 
     let rows = sessions.map((s) => {
       const flagsOf = (t) => s.behavioralFlags.filter((f) => f.flagType === t);
@@ -506,14 +490,16 @@ async function getLiveSessions(req, res, next) {
 
       const e = examById[s.examId] || { id: s.examId, title: "", courseCode: "" };
 
-      // Per-student duration in seconds
+      // Per-student time spent (seconds from start to submission / now)
       const start = s.startedAt ? new Date(s.startedAt) : now;
       const end = s.submittedAt ? new Date(s.submittedAt) : now;
       const studentDuration = Math.max(0, (end - start) / 1000);
-      const avgDuration = examAvgDuration[s.examId] || 0;
-      // ratio = student_duration / avg_duration_of_all_students_for_that_exam
-      const exam_duration_ratio = avgDuration > 0
-        ? Math.round((studentDuration / avgDuration) * 10000) / 10000
+
+      // Examiner-set duration in seconds
+      const examinerDurationSecs = (e.durationMinutes || 0) * 60;
+      // ratio = time student spent / total duration set by examiner
+      const exam_duration_ratio = examinerDurationSecs > 0
+        ? Math.round((studentDuration / examinerDurationSecs) * 10000) / 10000
         : 0;
 
       return {
@@ -531,6 +517,7 @@ async function getLiveSessions(req, res, next) {
         status: s.status,
         submittedAt: s.submittedAt,
         venue: s.seatingAssignment?.venue?.name || "",
+        exam_duration_minutes: e.durationMinutes || 0,
         exam_duration_ratio,
         tab_switch_flag: cf("TAB_SWITCH") > 0,
         tab_switch_count: cf("TAB_SWITCH"),

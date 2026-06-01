@@ -14,6 +14,7 @@ interface LiveRow {
   gender: string; program: string; status: string;
   submittedAt: string | null;
   venue: string;
+  exam_duration_minutes: number;
   exam_duration_ratio: number;
   tab_switch_flag: boolean; tab_switch_count: number; time_away_exam_site: number;
   answer_paste_flag: boolean;
@@ -91,13 +92,14 @@ const COLUMNS: ColumnDef[] = [
   { key: "status",                  label: "STATUS" },
   { key: "submittedAt",             label: "SUBMISSION TIME",              getValue: (r) => r.submittedAt || "" },
   { key: "venue",                   label: "VENUE" },
+  { key: "exam_duration_minutes",   label: "EXAM DURATION (MINUTES)",      align: "center" },
   { key: "exam_duration_ratio",     label: "EXAM DURATION RATIO",          align: "center" },
   { key: "tab_switch_flag",         label: "TAB SWITCH FLAG",              align: "center", getValue: (r) => (r.tab_switch_flag ? 1 : 0) },
   { key: "tab_switch_count",        label: "TAB SWITCH COUNT",             align: "center" },
   { key: "time_away_exam_site",     label: "TIME AWAY FROM EXAM SITE (s)", align: "center" },
   { key: "answer_paste_flag",       label: "ANSWER PASTE FLAG",            align: "center", getValue: (r) => (r.answer_paste_flag ? 1 : 0) },
-  { key: "file_drop_flag",          label: "DRAGGING FILE ONTO EXAM WINDOW", align: "center", getValue: (r) => (r.file_drop_flag ? 1 : 0) },
-  { key: "clipboard_file_flag",     label: "PASTING FILE FROM CLIPBOARD",  align: "center", getValue: (r) => (r.clipboard_file_flag ? 1 : 0) },
+  { key: "file_drop_flag",          label: "DRAG FILE FLAG",               align: "center", getValue: (r) => (r.file_drop_flag ? 1 : 0) },
+  { key: "clipboard_file_flag",     label: "CLIPBOARD PASTE FLAG",         align: "center", getValue: (r) => (r.clipboard_file_flag ? 1 : 0) },
   { key: "window_minimize_flag",    label: "WINDOW MINIMIZE FLAG",         align: "center", getValue: (r) => (r.window_minimize_flag ? 1 : 0) },
   { key: "multi_device_login_flag", label: "MULTI DEVICE LOGIN FLAG",      align: "center", getValue: (r) => (r.multi_device_login_flag ? 1 : 0) },
 ];
@@ -106,10 +108,11 @@ const COLUMNS: ColumnDef[] = [
 const ML_HEADERS = [
   "exam_type", "course_name", "course_code", "student_name", "username",
   "gender", "programme", "submission_time",
-  "tab_switch_flag", "tab_switch_count", "time_away_from_exam_site",
-  "exam_duration_ratio", "window_blur", "answer_paste",
-  "dragging_file_over_exam_window", "multi_device_login",
-  "venue", "pasting_file_content_from_clipboard",
+  "tab_switch_flag", "tab_switch_count", "time_away_from_site",
+  "exam_duration_minutes", "exam_duration_ratio",
+  "window_blur", "answer_paste",
+  "drag_file_flag", "multi_device_login",
+  "venue", "clipboard_paste_flag",
 ];
 function rowToML(r: LiveRow) {
   return [
@@ -120,17 +123,18 @@ function rowToML(r: LiveRow) {
     r.studentUsername, // username
     r.gender,          // gender
     r.program,         // programme
-    fmtSubmittedAt(r.submittedAt), // submission_time
-    r.tab_switch_flag ? "Yes" : "No",  // tab_switch_flag
-    r.tab_switch_count,                // tab_switch_count
-    r.time_away_exam_site,             // time_away_from_exam_site
-    r.exam_duration_ratio,             // exam_duration_ratio
-    r.window_minimize_flag ? "Yes" : "No", // window_blur
-    r.answer_paste_flag ? "Yes" : "No",    // answer_paste
-    r.file_drop_flag ? "Yes" : "No",       // dragging_file_over_exam_window
-    r.multi_device_login_flag ? "Yes" : "No", // multi_device_login
-    r.venue,                               // venue
-    r.clipboard_file_flag ? "Yes" : "No", // pasting_file_content_from_clipboard
+    fmtSubmittedAt(r.submittedAt),             // submission_time
+    r.tab_switch_flag ? "Yes" : "No",          // tab_switch_flag
+    r.tab_switch_count,                        // tab_switch_count
+    r.time_away_exam_site,                     // time_away_from_site
+    r.exam_duration_minutes,                   // exam_duration_minutes
+    r.exam_duration_ratio,                     // exam_duration_ratio
+    r.window_minimize_flag ? "Yes" : "No",     // window_blur
+    r.answer_paste_flag ? "Yes" : "No",        // answer_paste
+    r.file_drop_flag ? "Yes" : "No",           // drag_file_flag
+    r.multi_device_login_flag ? "Yes" : "No",  // multi_device_login
+    r.venue,                                   // venue
+    r.clipboard_file_flag ? "Yes" : "No",      // clipboard_paste_flag
   ];
 }
 
@@ -644,6 +648,10 @@ export default function LiveSessionPage() {
 
                         <td className="p-3 text-white/70">
                           <span className="text-[11px]">{r.venue || "—"}</span>
+                        </td>
+
+                        <td className="p-3 text-center text-white/70">
+                          <span className="text-[11px] font-mono">{r.exam_duration_minutes ?? "—"}</span>
                         </td>
 
                         <td className="p-3 text-center text-white/70">
