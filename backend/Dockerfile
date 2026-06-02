@@ -17,4 +17,4 @@ EXPOSE 5000
 
 # Apply any pending schema changes (creates indexes, new tables, etc.)
 # then start the server.
-CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node src/server.js"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node prisma/seed.js && node src/server.js"]

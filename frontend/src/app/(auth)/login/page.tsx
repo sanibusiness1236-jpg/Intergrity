@@ -2,7 +2,6 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { useAuthStore } from "@/store/authStore";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GlowInput } from "@/components/auth/GlowInput";
@@ -131,11 +130,9 @@ function LoginForm() {
           <span className="relative z-10">{isLoading ? "Signing in..." : "Sign In"}</span>
         </button>
 
-        <p className="text-center text-sm text-white/60">
-          Don&apos;t have an account?{" "}
-          <Link href="/register" className="font-medium text-white underline-offset-4 hover:underline">
-            Create one
-          </Link>
+        <p className="text-center text-sm text-white/50 rounded-lg border border-amber-400/20 bg-amber-400/5 px-4 py-3">
+          Registration is by invitation only.{" "}
+          <span className="text-amber-300/80">Please contact an Examiner to obtain a sign-up link.</span>
         </p>
       </form>
     </AuthShell>

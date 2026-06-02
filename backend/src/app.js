@@ -18,6 +18,7 @@ const analyticsRoutes = require("./modules/analytics/analytics.routes");
 const studentRoutes = require("./modules/students/student.routes");
 const userRoutes = require("./modules/users/user.routes");
 const aiImportRoutes = require("./modules/ai-import/aiImport.routes");
+const invitesRoutes = require("./modules/invites/invites.routes");
 
 const app = express();
 
@@ -64,6 +65,7 @@ app.use("/api/analytics", cacheFor(30), analyticsRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/users", cacheFor(30), userRoutes);
 app.use("/api/ai-import", aiImportRoutes);
+app.use("/api/invites", invitesRoutes);
 
 app.use(errorHandler);
 

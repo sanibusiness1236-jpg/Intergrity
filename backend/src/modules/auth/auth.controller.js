@@ -11,7 +11,27 @@ function blankToNull(v) {
 
 async function register(req, res, next) {
   try {
-    const { email, password, firstName, lastName, role, institutionId, studentId, program, gender } = req.body;
+    const { email, password, firstName, lastName, institutionId, studentId, program, gender, inviteToken } = req.body;
+
+    // ── Invite token is required for all registrations ──────────────────────
+    if (!inviteToken) {
+      throw new AppError("Registration is by invitation only. Please use a valid invite link.", 403);
+    }
+
+    const invite = await prisma.inviteLink.findUnique({ where: { token: inviteToken } });
+    if (!invite || !invite.isActive) {
+      throw new AppError("Invalid or expired invitation link.", 403);
+    }
+    if (new Date() > invite.expiresAt) {
+      throw new AppError("This invitation link has expired.", 403);
+    }
+    if (invite.usedCount >= invite.maxUses) {
+      throw new AppError("This invitation link has already been fully used.", 403);
+    }
+
+    // Role is dictated by the invite — ignore any role sent in the body
+    const role = invite.role;
+    // ─────────────────────────────────────────────────────────────────────────
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -46,7 +66,16 @@ async function register(req, res, next) {
         program: normalizedProgram,
         gender: normalizedGender,
       },
-      select: { id: true, email: true, firstName: true, lastName: true, role: true },
+      select: { id: true, email: true, firstName: true, lastName: true, role: true, isSuperAdmin: true },
+    });
+
+    // Mark invite as used (deactivate if single-use / all uses exhausted)
+    await prisma.inviteLink.update({
+      where: { id: invite.id },
+      data: {
+        usedCount: { increment: 1 },
+        isActive: invite.usedCount + 1 < invite.maxUses,
+      },
     });
 
     const tokenPayload = { id: user.id, email: user.email, role: user.role };
@@ -94,7 +123,7 @@ async function login(req, res, next) {
     res.json({
       success: true,
       data: {
-        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role },
+        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, isSuperAdmin: user.isSuperAdmin },
         accessToken,
         refreshToken,
       },
@@ -170,7 +199,7 @@ async function getProfile(req, res, next) {
       select: {
         id: true, email: true, firstName: true, lastName: true, role: true,
         studentId: true, program: true, gender: true,
-        institutionId: true, institution: true, createdAt: true,
+        institutionId: true, institution: true, createdAt: true, isSuperAdmin: true,
       },
     });
     if (!user) throw new AppError("User not found", 404);

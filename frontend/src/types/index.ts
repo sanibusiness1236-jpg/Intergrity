@@ -11,6 +11,20 @@ export interface User {
   gender?: string;
   avatarUrl?: string;
   institutionId?: string;
+  isSuperAdmin?: boolean;
+}
+
+export interface InviteLink {
+  id: string;
+  token: string;
+  role: Role;
+  expiresAt: string;
+  singleUse: boolean;
+  maxUses: number;
+  usedCount: number;
+  isActive: boolean;
+  note?: string;
+  createdAt: string;
 }
 
 export interface Institution {

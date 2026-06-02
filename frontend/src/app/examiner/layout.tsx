@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: "/examiner/integrity-monitoring", label: "Integrity Monitoring", icon: <Icon d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /> },
   { href: "/examiner/live-session", label: "Live Session", icon: <Icon d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /> },
   { href: "/examiner/branding", label: "Branding", icon: <Icon d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /> },
+  { href: "/examiner/security-access", label: "Security & Access", icon: <Icon d="M12 11c0-1.657-.895-3-2-3s-2 1.343-2 3v1H7a2 2 0 00-2 2v5a2 2 0 002 2h10a2 2 0 002-2v-5a2 2 0 00-2-2h-1v-1c0-1.657-.895-3-2-3s-2 1.343-2 3m0 0v1" /> },
 ];
 
 export default function ExaminerLayout({ children }: { children: React.ReactNode }) {
