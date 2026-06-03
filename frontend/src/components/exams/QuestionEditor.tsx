@@ -47,6 +47,8 @@ export interface QuestionFormValue {
   marks: number;
   fillInBlankType: "text" | "dropdown";
   dropdownOptions: string[];
+  acceptedAnswers: string[];   // FILL_IN_BLANK text-type: list of accepted answers
+  caseSensitive: boolean;      // FILL_IN_BLANK text-type: case-sensitive matching
   blocks: Block[];
 }
 
@@ -60,14 +62,33 @@ export function questionToForm(q: Partial<Question>): QuestionFormValue {
     ? rawBlocks.map((b) => ({ ...b, id: b.id || uid() }))
     : [];
 
+  // Parse FILL_IN_BLANK text-type accepted answers (new multi-answer format or legacy string)
+  let acceptedAnswers: string[] = [""];
+  let caseSensitive = false;
+  if (q.type === "FILL_IN_BLANK" && fibType === "text") {
+    const ca = q.correctAnswer as unknown;
+    if (ca && typeof ca === "object" && !Array.isArray(ca) && Array.isArray((ca as { answers?: string[] }).answers)) {
+      acceptedAnswers = [...(ca as { answers: string[]; caseSensitive?: boolean }).answers];
+      caseSensitive = !!(ca as { caseSensitive?: boolean }).caseSensitive;
+    } else if (typeof ca === "string" && ca) {
+      acceptedAnswers = [ca];
+    }
+  }
+
+  // For dropdown FIB, correctAnswerStr is the selected option
+  // For text FIB, correctAnswerStr is unused (acceptedAnswers is used instead)
+  const correctAnswerStr =
+    q.type === "MCQ" || q.type === "TRUE_FALSE"
+      ? String(q.correctAnswer ?? "")
+      : q.type === "FILL_IN_BLANK" && fibType === "dropdown"
+        ? String(q.correctAnswer ?? "")
+        : "";
+
   return {
     type: (q.type as QuestionType) || "MCQ",
     text: q.text || "",
     options: q.type === "MCQ" && Array.isArray(q.options) ? [...(q.options as string[])] : ["", "", "", ""],
-    correctAnswerStr:
-      q.type === "MCQ" || q.type === "TRUE_FALSE" || q.type === "FILL_IN_BLANK"
-        ? String(q.correctAnswer ?? "")
-        : "",
+    correctAnswerStr,
     blanks:
       q.type === "MULTI_BLANK_EQUATION" && Array.isArray(q.correctAnswer)
         ? [...(q.correctAnswer as string[])]
@@ -75,6 +96,8 @@ export function questionToForm(q: Partial<Question>): QuestionFormValue {
     marks: q.marks ?? 1,
     fillInBlankType: fibType,
     dropdownOptions: existingDropdown,
+    acceptedAnswers,
+    caseSensitive,
     blocks,
   };
 }
@@ -154,12 +177,14 @@ export function formToPayload(form: QuestionFormValue): {
         error: null,
       };
     }
-    if (!form.correctAnswerStr.trim()) return { payload: null, error: "Provide the expected answer" };
+    // Text-type: require at least one accepted answer
+    const answers = form.acceptedAnswers.map((a) => a.trim()).filter(Boolean);
+    if (answers.length === 0) return { payload: null, error: "Provide at least one expected answer" };
     return {
       payload: {
         type: "FILL_IN_BLANK",
         text: form.text,
-        correctAnswer: form.correctAnswerStr.trim(),
+        correctAnswer: { answers, caseSensitive: form.caseSensitive },
         marks: form.marks,
         fillInBlankType: "text",
         blocks,
@@ -390,7 +415,7 @@ export function QuestionEditor({
   }
 
   function changeType(t: QuestionType) {
-    setForm({ ...form, type: t, correctAnswerStr: "", fillInBlankType: "text" });
+    setForm({ ...form, type: t, correctAnswerStr: "", fillInBlankType: "text", acceptedAnswers: [""], caseSensitive: false });
   }
 
   function insertBlock(type: BlockType) {
@@ -712,16 +737,72 @@ export function QuestionEditor({
               )}
             </div>
           ) : (
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Expected Answer</label>
-              <input
-                className="auth-input h-11 w-full rounded-lg px-3 text-sm"
-                value={form.correctAnswerStr}
-                onChange={(e) => setForm({ ...form, correctAnswerStr: e.target.value })}
-                placeholder="What's the correct answer?"
-                required
-              />
-              <p className="text-xs text-white/40">Matching is case-insensitive.</p>
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                    Accepted Answers
+                  </label>
+                  <span className="text-[10px] text-white/30">Any one of these will be marked correct</span>
+                </div>
+                {form.acceptedAnswers.map((ans, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-blue-500/15 text-[10px] font-bold text-blue-300">
+                      {i + 1}
+                    </span>
+                    <input
+                      className="auth-input h-10 flex-1 rounded-lg px-3 text-sm"
+                      placeholder={i === 0 ? "Primary answer…" : `Alternative answer ${i + 1}…`}
+                      value={ans}
+                      onChange={(e) => {
+                        const next = [...form.acceptedAnswers];
+                        next[i] = e.target.value;
+                        setForm({ ...form, acceptedAnswers: next });
+                      }}
+                    />
+                    {form.acceptedAnswers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, acceptedAnswers: form.acceptedAnswers.filter((_, idx) => idx !== i) })}
+                        className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
+                        title="Remove this answer"
+                      >
+                        <Svg d="M18 6L6 18M6 6l12 12" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, acceptedAnswers: [...form.acceptedAnswers, ""] })}
+                  className="text-xs text-white/50 hover:text-white transition"
+                >
+                  + Add alternative answer
+                </button>
+              </div>
+
+              {/* Case sensitivity toggle */}
+              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-white/8 bg-white/[0.02] p-3 transition hover:bg-white/[0.04]">
+                <div className="space-y-0.5">
+                  <p className="text-xs font-medium text-white/70">Case sensitive matching</p>
+                  <p className="text-[11px] text-white/35">
+                    {form.caseSensitive
+                      ? '"Paris" and "paris" would be marked differently'
+                      : '"Paris" and "paris" are treated as the same answer'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, caseSensitive: !form.caseSensitive })}
+                  className={`relative ml-4 h-6 w-10 shrink-0 rounded-full border transition-colors ${
+                    form.caseSensitive ? "border-indigo-400/50 bg-indigo-500/30" : "border-white/15 bg-white/10"
+                  }`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full shadow transition-transform ${
+                    form.caseSensitive ? "translate-x-4 bg-indigo-400" : "translate-x-0.5 bg-white/40"
+                  }`} />
+                </button>
+              </label>
             </div>
           )}
         </div>

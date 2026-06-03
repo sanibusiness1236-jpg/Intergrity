@@ -286,9 +286,23 @@ function gradeAnswer(question, studentAnswer) {
   }
 
   if (type === "FILL_IN_BLANK") {
+    const given = String(studentAnswer ?? "").trim();
+
+    // New format: { answers: string[], caseSensitive: boolean }
+    if (correctAnswer && typeof correctAnswer === "object" && !Array.isArray(correctAnswer) && Array.isArray(correctAnswer.answers)) {
+      const { answers, caseSensitive } = correctAnswer;
+      const isCorrect = answers.some((ans) => {
+        const expected = String(ans ?? "").trim();
+        return caseSensitive
+          ? expected === given
+          : expected.toLowerCase() === given.toLowerCase();
+      });
+      return { isCorrect, score: isCorrect ? marks : 0 };
+    }
+
+    // Legacy format: plain string (case-insensitive by default)
     const expected = String(correctAnswer ?? "").trim().toLowerCase();
-    const given = String(studentAnswer ?? "").trim().toLowerCase();
-    const isCorrect = expected === given;
+    const isCorrect = expected === given.toLowerCase();
     return { isCorrect, score: isCorrect ? marks : 0 };
   }
 

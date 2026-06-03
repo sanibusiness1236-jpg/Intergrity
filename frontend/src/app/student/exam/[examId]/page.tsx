@@ -42,6 +42,9 @@ export default function ExamTakingPage() {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [result, setResult] = useState<{ score: number; maxScore: number; percentage: number } | null>(null);
 
+  /* ── Instructions overlay ─── */
+  const [showInstructions, setShowInstructions] = useState(false);
+
   /* ── Question reporting ─── */
   const [reportingQuestionId, setReportingQuestionId] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState<"TYPO" | "WRONG_ANSWER" | "UNCLEAR" | "OTHER">("TYPO");
@@ -383,6 +386,23 @@ export default function ExamTakingPage() {
             </div>
             <h2 className="text-xl font-bold text-white">{exam?.title}</h2>
             <p className="mt-1 text-sm text-white/50">{exam?.courseCode} · {exam?.durationMinutes} min</p>
+
+            {/* Description & Instructions */}
+            {(exam?.description || exam?.instructions) && (
+              <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/[0.06] p-4 text-left space-y-2">
+                {exam?.description && (
+                  <p className="text-sm text-white/70 leading-relaxed">{exam.description}</p>
+                )}
+                {exam?.instructions && (
+                  <div className="space-y-1">
+                    {exam?.description && <div className="h-px w-full bg-white/8 my-2" />}
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-300/70">Instructions</p>
+                    <p className="text-sm text-white/60 leading-relaxed whitespace-pre-wrap">{exam.instructions}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             <p className="mt-4 text-xs text-white/40">This exam is password-protected. Enter the password provided by your examiner to begin.</p>
             <form onSubmit={handlePasswordSubmit} className="mt-5 space-y-3">
               <input
@@ -498,13 +518,28 @@ export default function ExamTakingPage() {
               <h2 className="text-xl font-bold text-white">{exam?.title}</h2>
               <p className="mt-1 text-sm text-white/50">{exam?.courseCode}</p>
             </div>
+
+            {/* Description */}
+            {exam?.description && (
+              <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.06] p-4 text-left">
+                <p className="text-sm text-white/70 leading-relaxed">{exam.description}</p>
+              </div>
+            )}
+
             <div className="rounded-xl border border-white/5 bg-white/[0.02] p-4 text-left space-y-2 text-xs">
               <InfoRow label="Duration" value={`${exam?.durationMinutes} minutes`} />
               <InfoRow label="Questions" value={questions.length} />
               <InfoRow label="Total Marks" value={exam?.totalMarks} />
               <InfoRow label="Max Attempts" value={exam?.maxAttempts ?? 1} />
-              {exam?.instructions && <InfoRow label="Instructions" value={exam.instructions} />}
             </div>
+
+            {/* Instructions */}
+            {exam?.instructions && (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-4 text-left space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/70">Instructions</p>
+                <p className="text-sm text-white/65 leading-relaxed whitespace-pre-wrap">{exam.instructions}</p>
+              </div>
+            )}
             {/* Venue selection */}
             {exam?.venues && exam.venues.length > 0 && (
               <div className="space-y-1.5">
@@ -675,6 +710,49 @@ export default function ExamTakingPage() {
         </div>
       )}
 
+      {/* ── Instructions overlay ─────────────────── */}
+      {showInstructions && (exam?.description || exam?.instructions) && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" size={16} />
+                <h3 className="font-bold text-white">Exam Instructions</h3>
+              </div>
+              <button
+                onClick={() => setShowInstructions(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/50 transition hover:bg-white/10 hover:text-white"
+              >
+                <Icon d="M18 6L6 18M6 6l12 12" size={14} />
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-5 space-y-4">
+              {exam?.description && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Description</p>
+                  <p className="text-sm text-white/75 leading-relaxed">{exam.description}</p>
+                </div>
+              )}
+              {exam?.description && exam?.instructions && <div className="h-px bg-white/8" />}
+              {exam?.instructions && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/70">Instructions</p>
+                  <p className="text-sm text-white/70 leading-relaxed whitespace-pre-wrap">{exam.instructions}</p>
+                </div>
+              )}
+            </div>
+            <div className="border-t border-white/8 px-5 py-3">
+              <button
+                onClick={() => setShowInstructions(false)}
+                className="w-full rounded-xl border border-white/10 bg-white/5 py-2 text-sm font-medium text-white/70 transition hover:bg-white/10"
+              >
+                Close &amp; Continue Exam
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Fullscreen warning overlay ────────────── */}
       {fsWarning && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-sm">
@@ -692,6 +770,54 @@ export default function ExamTakingPage() {
             >
               Return to Fullscreen
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Instructions overlay ─────────────────── */}
+      {showInstructions && (exam?.description || exam?.instructions) && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-300">
+                  <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" size={15} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">{exam?.title}</h3>
+                  <p className="text-[10px] text-white/40">{exam?.courseCode}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowInstructions(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/50 transition hover:bg-white/10 hover:text-white"
+              >
+                <Icon d="M18 6L6 18M6 6l12 12" size={14} />
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-5 space-y-4">
+              {exam?.description && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Description</p>
+                  <p className="text-sm text-white/70 leading-relaxed">{exam.description}</p>
+                </div>
+              )}
+              {exam?.description && exam?.instructions && <div className="h-px bg-white/8" />}
+              {exam?.instructions && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/70">Instructions</p>
+                  <p className="text-sm text-white/65 leading-relaxed whitespace-pre-wrap">{exam.instructions}</p>
+                </div>
+              )}
+            </div>
+            <div className="border-t border-white/8 px-5 py-3">
+              <button
+                onClick={() => setShowInstructions(false)}
+                className="w-full rounded-xl bg-white/5 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/10"
+              >
+                Close &amp; return to exam
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -745,6 +871,16 @@ export default function ExamTakingPage() {
           >
             <Icon d="M4 6h16M4 10h16M4 14h8" size={13} />
           </button>
+          {(exam?.description || exam?.instructions) && (
+            <button
+              onClick={() => setShowInstructions((v) => !v)}
+              title={showInstructions ? "Hide instructions" : "Show instructions"}
+              className={`hidden sm:flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${showInstructions ? "border-amber-400/40 bg-amber-500/15 text-amber-300" : "border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70"}`}
+            >
+              <Icon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" size={13} />
+              Instructions
+            </button>
+          )}
 
           {/* Save indicator */}
           <div className="hidden items-center gap-1.5 text-[10px] sm:flex">
