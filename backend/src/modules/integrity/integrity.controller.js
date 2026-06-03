@@ -493,11 +493,19 @@ async function getLiveSessions(req, res, next) {
       // Per-student time spent (seconds from start to submission / now)
       const start = s.startedAt ? new Date(s.startedAt) : now;
       const end = s.submittedAt ? new Date(s.submittedAt) : now;
-      const studentDuration = Math.max(0, (end - start) / 1000);
+      const rawDuration = Math.max(0, (end - start) / 1000);
 
       // Examiner-set duration in seconds
       const examinerDurationSecs = (e.durationMinutes || 0) * 60;
-      // ratio = time student spent / total duration set by examiner
+
+      // Cap the student duration at the examiner-set limit so the ratio
+      // is always in the range [0, 1].
+      // ratio = 1 means the student used up all available time;
+      // ratio < 1 means they finished early.
+      const studentDuration = examinerDurationSecs > 0
+        ? Math.min(rawDuration, examinerDurationSecs)
+        : rawDuration;
+
       const exam_duration_ratio = examinerDurationSecs > 0
         ? Math.round((studentDuration / examinerDurationSecs) * 10000) / 10000
         : 0;
