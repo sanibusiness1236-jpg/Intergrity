@@ -598,9 +598,22 @@ export default function ExamTakingPage() {
     const pass = pct >= 50;
     // attemptsUsed = count before this attempt; add 1 for current → retake if still under cap
     const canRetake = attemptInfo && (attemptInfo.attemptsUsed + 1) < attemptInfo.maxAttempts;
+
+    // Find the matching grade from gradingSystem (based on percentage)
+    type GradeRow = { grade: string; min: number; max: number };
+    const gradeRows = Array.isArray(exam?.gradingSystem) ? (exam.gradingSystem as GradeRow[]) : [];
+    const matchedGrade = gradeRows.find((g) => pct >= g.min && pct <= g.max);
+
+    // Find the matching remark from scoreRemarks (based on percentage)
+    type RemarkRow = { min: number; max: number; remark: string };
+    const remarkRows = Array.isArray(exam?.scoreRemarks) ? (exam.scoreRemarks as RemarkRow[]) : [];
+    const matchedRemark = exam?.showRemarksToStudents
+      ? remarkRows.find((r) => pct >= r.min && pct <= r.max)
+      : null;
+
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-950 p-4">
-        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-8 text-center shadow-2xl space-y-5">
+      <div className="flex h-screen items-center justify-center bg-slate-950 p-4 overflow-y-auto">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-8 text-center shadow-2xl space-y-5 my-4">
           <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${pass ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
             <Icon d={pass ? "M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z" : "M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"} size={32} />
           </div>
@@ -612,6 +625,7 @@ export default function ExamTakingPage() {
               </p>
             )}
           </div>
+
           {exam?.showScoreToStudents !== false ? (
             <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
               <p className="text-xs uppercase tracking-wider text-white/40">Your score</p>
@@ -619,12 +633,24 @@ export default function ExamTakingPage() {
                 {result.score}<span className="text-xl text-white/40"> / {result.maxScore}</span>
               </p>
               <p className={`mt-1 text-sm font-semibold ${pass ? "text-emerald-300" : "text-amber-300"}`}>{pct}%</p>
+              {matchedGrade && (
+                <p className="mt-2 text-lg font-bold text-indigo-300">Grade: {matchedGrade.grade}</p>
+              )}
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 text-sm text-white/50">
               Your examiner has not enabled score visibility.
             </div>
           )}
+
+          {/* Remark — shown whenever showRemarksToStudents is on */}
+          {matchedRemark && (
+            <div className="rounded-xl border border-indigo-400/25 bg-indigo-500/[0.08] px-5 py-4 text-left space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-300/70">Examiner&apos;s Remark</p>
+              <p className="text-sm leading-relaxed text-white/75 italic">&ldquo;{matchedRemark.remark}&rdquo;</p>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <button onClick={() => router.push("/student")} className="flex-1 rounded-xl border border-white/10 bg-white/5 py-2.5 text-sm text-white/70 transition hover:bg-white/10">
               Dashboard
