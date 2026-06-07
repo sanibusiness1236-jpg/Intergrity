@@ -19,6 +19,7 @@ const studentRoutes = require("./modules/students/student.routes");
 const userRoutes = require("./modules/users/user.routes");
 const aiImportRoutes = require("./modules/ai-import/aiImport.routes");
 const invitesRoutes = require("./modules/invites/invites.routes");
+const anomalyRoutes = require("./modules/anomaly/anomaly.routes");
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use("/api/students", studentRoutes);
 app.use("/api/users", cacheFor(30), userRoutes);
 app.use("/api/ai-import", aiImportRoutes);
 app.use("/api/invites", invitesRoutes);
+app.use("/api/anomaly", anomalyRoutes);
 
 app.use(errorHandler);
 

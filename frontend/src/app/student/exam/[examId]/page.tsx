@@ -62,6 +62,17 @@ export default function ExamTakingPage() {
   // Devices found at scan time that are not the obvious built-in default
   const [usbFoundDevices, setUsbFoundDevices] = useState<{ name: string; type: string }[]>([]);
 
+  /* ── mobile detection ─── */
+  const [isMobile, setIsMobile] = useState(false);
+  const isMobileRef = useRef(false);
+  useEffect(() => {
+    const mobile =
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      window.innerWidth <= 768;
+    setIsMobile(mobile);
+    isMobileRef.current = mobile;
+  }, []);
+
   /* ── fullscreen ─── */
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsWarning, setFsWarning] = useState(false);
@@ -142,17 +153,53 @@ export default function ExamTakingPage() {
     scan();
   }, [phase]);
 
-  /* ─── Phase 1: load exam info ─────────────────── */
+  /* ─── Phase 1: load exam info (+ restore session on refresh) ─── */
   useEffect(() => {
     let cancelled = false;
-    api.get(`/exams/${examId}`)
-      .then(({ data }) => {
+    const load = async () => {
+      try {
+        const { data } = await api.get(`/exams/${examId}`);
         if (cancelled) return;
         setExam(data.data);
         setQuestions(data.data.questions || []);
+
+        // Check if the student already has an active session (page refresh restore)
+        try {
+          const { data: activeData } = await api.get(`/sessions/my-active?examId=${examId}`);
+          if (cancelled) return;
+          if (activeData.data) {
+            const { session: s, recoveredAnswers, remaining, alreadyExpired } = activeData.data;
+            setSession(s);
+            if (recoveredAnswers) setAnswers(recoveredAnswers);
+            setTimeLeft(Math.max(0, remaining));
+
+            const socket = connectSocket();
+            socket.emit("join:exam", { sessionId: s.id, examId });
+            socket.on("answer:saved", ({ success }: { success: boolean }) => {
+              setIsSaving(false);
+              if (success) setLastSaved(new Date());
+            });
+
+            // Log this page refresh for integrity monitoring (non-blocking)
+            api.post(`/sessions/${s.id}/log-refresh`, {}).catch(() => {});
+
+            setPhase("taking");
+            // Enter fullscreen on desktop only
+            if (!isMobileRef.current && !alreadyExpired) {
+              setTimeout(() => enterFullscreen(), 150);
+            }
+            return;
+          }
+        } catch {
+          // No active session found — proceed to normal entry flow
+        }
+
         setPhase(data.data.examPassword ? "password" : "ready");
-      })
-      .catch(() => { router.replace("/student"); });
+      } catch {
+        if (!cancelled) router.replace("/student");
+      }
+    };
+    load();
     return () => { cancelled = true; };
   }, [examId, router]);
 
@@ -227,6 +274,7 @@ export default function ExamTakingPage() {
 
   /* ─── Fullscreen ──────────────────────────────── */
   function enterFullscreen() {
+    if (isMobileRef.current) return; // Mobile devices use full-viewport CSS instead
     const el = containerRef.current || document.documentElement;
     el.requestFullscreen?.().catch(() => {});
   }
@@ -235,7 +283,8 @@ export default function ExamTakingPage() {
     function onChange() {
       const fs = !!document.fullscreenElement;
       setIsFullscreen(fs);
-      if (!fs && phase === "taking") setFsWarning(true);
+      // Only warn on desktop — mobile never enters fullscreen
+      if (!fs && phase === "taking" && !isMobileRef.current) setFsWarning(true);
     }
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
@@ -253,19 +302,28 @@ export default function ExamTakingPage() {
     return () => clearInterval(t);
   });
 
+  /* ─── Auto-submit if session restored with zero time remaining ─── */
+  const hasAutoSubmittedRef = useRef(false);
+  useEffect(() => {
+    if (phase === "taking" && timeLeft === 0 && session && !hasAutoSubmittedRef.current) {
+      hasAutoSubmittedRef.current = true;
+      handleSubmit(true);
+    }
+  }, [phase, timeLeft, session, handleSubmit]);
+
   // Auto-show timer when critical
   useEffect(() => {
     if (timeCritical) setShowTimer(true);
   }, [timeCritical]);
 
-  /* ─── Periodic autosave ───────────────────────── */
+  /* ─── Periodic autosave (every 30 s) ─────────── */
   useEffect(() => {
     if (phase !== "taking" || !sessionId) return;
     const socket = connectSocket();
     const t = setInterval(() => {
       setIsSaving(true);
       socket.emit("answer:save", { sessionId, answers: answersRef.current });
-    }, 15000);
+    }, 30000);
     return () => clearInterval(t);
   }, [phase, sessionId]);
 
@@ -300,8 +358,19 @@ export default function ExamTakingPage() {
   }, [isSubmitting, sessionId, router]);
 
   /* ─── Answer + navigation ─────────────────────── */
+  const answerSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   function setAnswer(questionId: string, value: unknown) {
     setAnswers((prev) => ({ ...prev, [questionId]: value }));
+    // Debounced immediate save: fires 1.5 s after the last answer change
+    if (answerSaveTimerRef.current) clearTimeout(answerSaveTimerRef.current);
+    if (sessionId) {
+      answerSaveTimerRef.current = setTimeout(() => {
+        const socket = connectSocket();
+        setIsSaving(true);
+        socket.emit("answer:save", { sessionId, answers: answersRef.current });
+      }, 1500);
+    }
   }
 
   async function handleNext() {
@@ -680,7 +749,12 @@ export default function ExamTakingPage() {
   /* EXAM TAKING                                     */
   /* ═══════════════════════════════════════════════ */
   return (
-    <div ref={containerRef} className="relative flex h-screen flex-col overflow-hidden text-white">
+    <div
+      ref={containerRef}
+      className={`relative flex flex-col overflow-hidden text-white ${
+        isMobile ? "fixed inset-0 z-[9999]" : "h-screen"
+      }`}
+    >
       {/*
         Hidden file input — gives the anti-cheat hook a real DOM target for
         "Opening the file picker" detection.  It is visually invisible and
@@ -1071,11 +1145,20 @@ export default function ExamTakingPage() {
               title={!allowBacktrack ? "Backtracking disabled" : ""}>
               <Icon d="M15 19l-7-7 7-7" /> Previous
             </button>
-            <button onClick={handleNext}
-              disabled={currentIndex === questions.length - 1}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 px-4 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:shadow-xl disabled:opacity-30">
-              Next <Icon d="M9 5l7 7-7 7" />
-            </button>
+            {currentIndex === questions.length - 1 ? (
+              <button
+                onClick={() => setShowSubmitModal(true)}
+                disabled={isSubmitting}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-gradient-to-r from-rose-500 to-orange-500 px-4 text-sm font-semibold text-white shadow-lg shadow-rose-500/20 transition hover:shadow-xl disabled:opacity-50">
+                <Icon d="M5 13l4 4L19 7" size={14} />
+                Submit Exam
+              </button>
+            ) : (
+              <button onClick={handleNext}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 px-4 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:shadow-xl">
+                Next <Icon d="M9 5l7 7-7 7" />
+              </button>
+            )}
           </div>
         </main>
 

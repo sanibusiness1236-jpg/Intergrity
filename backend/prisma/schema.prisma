@@ -55,6 +55,7 @@ enum FlagType {
   IP_ANOMALY
   ANSWER_SIMILARITY
   TIMING_ANOMALY
+  PAGE_REFRESH
 }
 
 model Institution {

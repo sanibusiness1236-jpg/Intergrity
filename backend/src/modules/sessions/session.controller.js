@@ -5,6 +5,13 @@ const { AppError } = require("../../middleware/errorHandler");
 const AUTOSAVE_PREFIX = "autosave:";
 const AUTOSAVE_TTL = 60 * 60 * 4; // 4 hours
 
+/** Extract the real client IP, honouring reverse-proxy X-Forwarded-For */
+function getClientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (xff) return xff.split(",")[0].trim();
+  return req.ip || req.socket?.remoteAddress || null;
+}
+
 async function startSession(req, res, next) {
   try {
     const { examId, password, venueId } = req.body;
@@ -197,6 +204,45 @@ async function submitExam(req, res, next) {
 
     await redis.del(`${AUTOSAVE_PREFIX}${sessionId}`);
 
+    // Record submission IP and check for IP-based anomalies (non-fatal)
+    try {
+      const submissionIp = getClientIp(req);
+      if (submissionIp) {
+        await prisma.examSession.update({
+          where: { id: sessionId },
+          data: { ipAddress: submissionIp },
+        });
+
+        // Find other sessions with the same IP for this exam
+        const sharedIpSessions = await prisma.examSession.findMany({
+          where: {
+            examId: session.examId,
+            ipAddress: submissionIp,
+            studentId: { not: req.user.id },
+            status: { in: ["SUBMITTED", "IN_PROGRESS", "TIMED_OUT"] },
+          },
+        });
+
+        if (sharedIpSessions.length > 0) {
+          await prisma.behavioralFlag.create({
+            data: {
+              sessionId,
+              studentId: req.user.id,
+              flagType: "IP_ANOMALY",
+              metadata: {
+                sharedIp: submissionIp,
+                otherStudentIds: sharedIpSessions.map((s) => s.studentId),
+                otherSessionIds: sharedIpSessions.map((s) => s.id),
+                detectedAt: new Date().toISOString(),
+              },
+            },
+          });
+        }
+      }
+    } catch (_) {
+      // Non-fatal — anomaly detection must not block submission
+    }
+
     res.json({
       success: true,
       data: { score: totalScore, maxScore, percentage: maxScore > 0 ? ((totalScore / maxScore) * 100).toFixed(2) : 0 },
@@ -310,4 +356,101 @@ function gradeAnswer(question, studentAnswer) {
   return { isCorrect, score: isCorrect ? marks : 0 };
 }
 
-module.exports = { startSession, autoSave, submitExam, getSession, getActiveSessions, relocateStudent };
+/**
+ * GET /sessions/my-active?examId=xxx
+ * Returns the student's current active session for a given exam,
+ * including recovered answers and remaining time. Used to restore
+ * the exam state after a page refresh without re-entering the password.
+ */
+async function getMyActiveSession(req, res, next) {
+  try {
+    const { examId } = req.query;
+    const studentId = req.user.id;
+    if (!examId) throw new AppError("examId is required", 400);
+
+    const session = await prisma.examSession.findFirst({
+      where: {
+        examId: String(examId),
+        studentId,
+        status: { in: ["IN_PROGRESS", "WAITING", "DISCONNECTED"] },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!session) return res.json({ success: true, data: null });
+
+    const [savedAnswers, exam] = await Promise.all([
+      redis.get(`${AUTOSAVE_PREFIX}${session.id}`),
+      prisma.exam.findUnique({
+        where: { id: String(examId) },
+        select: { durationMinutes: true },
+      }),
+    ]);
+
+    const elapsed = session.startedAt
+      ? Math.floor((Date.now() - new Date(session.startedAt).getTime()) / 1000)
+      : 0;
+    const totalSecs = (exam?.durationMinutes || 0) * 60;
+    const remaining = Math.max(0, totalSecs - elapsed);
+
+    res.json({
+      success: true,
+      data: {
+        session,
+        recoveredAnswers: savedAnswers ? JSON.parse(savedAnswers) : null,
+        remaining,
+        alreadyExpired: remaining <= 0,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /sessions/:sessionId/log-refresh
+ * Creates a PAGE_REFRESH behavioral flag for integrity monitoring.
+ * Called automatically by the client every time a page reload is detected.
+ */
+async function logPageRefresh(req, res, next) {
+  try {
+    const { sessionId } = req.params;
+    const session = await prisma.examSession.findUnique({ where: { id: sessionId } });
+    if (!session || session.studentId !== req.user.id) {
+      throw new AppError("Session not found", 404);
+    }
+    if (session.status !== "IN_PROGRESS") {
+      return res.json({ success: true });
+    }
+
+    await prisma.behavioralFlag.create({
+      data: {
+        sessionId,
+        studentId: req.user.id,
+        flagType: "PAGE_REFRESH",
+        metadata: {
+          ip: getClientIp(req),
+          userAgent: req.get("user-agent"),
+          refreshedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    // Notify examiner monitor in real time
+    try {
+      const { getIO } = require("../../socket");
+      getIO().to(`exam:${session.examId}`).emit("flag:new", {
+        sessionId,
+        studentId: req.user.id,
+        flagType: "PAGE_REFRESH",
+        createdAt: new Date(),
+      });
+    } catch (_) {}
+
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { startSession, autoSave, submitExam, getSession, getActiveSessions, relocateStudent, getMyActiveSession, logPageRefresh };
