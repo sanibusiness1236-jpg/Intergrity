@@ -302,15 +302,6 @@ export default function ExamTakingPage() {
     return () => clearInterval(t);
   });
 
-  /* ─── Auto-submit if session restored with zero time remaining ─── */
-  const hasAutoSubmittedRef = useRef(false);
-  useEffect(() => {
-    if (phase === "taking" && timeLeft === 0 && session && !hasAutoSubmittedRef.current) {
-      hasAutoSubmittedRef.current = true;
-      handleSubmit(true);
-    }
-  }, [phase, timeLeft, session, handleSubmit]);
-
   // Auto-show timer when critical
   useEffect(() => {
     if (timeCritical) setShowTimer(true);
@@ -356,6 +347,15 @@ export default function ExamTakingPage() {
       setIsSubmitting(false);
     }
   }, [isSubmitting, sessionId, router]);
+
+  /* ─── Auto-submit if session restored with zero time remaining ─── */
+  const hasAutoSubmittedRef = useRef(false);
+  useEffect(() => {
+    if (phase === "taking" && timeLeft === 0 && session && !hasAutoSubmittedRef.current) {
+      hasAutoSubmittedRef.current = true;
+      handleSubmit(true);
+    }
+  }, [phase, timeLeft, session, handleSubmit]);
 
   /* ─── Answer + navigation ─────────────────────── */
   const answerSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
