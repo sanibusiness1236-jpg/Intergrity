@@ -6,6 +6,8 @@ import { getSocket } from "@/lib/socket";
 interface AntiCheatConfig {
   sessionId: string;
   enabled: boolean;
+  /** Called when the socket is unavailable (offline). Caller should queue the flag to IDB. */
+  onOfflineFlag?: (flagType: string, metadata: Record<string, unknown>) => void;
 }
 
 interface FlagCounts {
@@ -29,18 +31,24 @@ interface FlagCounts {
  *                   metadata.source identifies which API fired.
  * MULTI_DEVICE is detected SERVER-SIDE (socket presence), not here.
  */
-export function useAntiCheat({ sessionId, enabled }: AntiCheatConfig) {
-  const flagCountRef = useRef<FlagCounts>({ tab_switch: 0, paste: 0, blur: 0, usb: 0 });
+export function useAntiCheat({ sessionId, enabled, onOfflineFlag }: AntiCheatConfig) {
+  const flagCountRef    = useRef<FlagCounts>({ tab_switch: 0, paste: 0, blur: 0, usb: 0 });
+  const onOfflineFlagRef = useRef(onOfflineFlag);
+  useEffect(() => { onOfflineFlagRef.current = onOfflineFlag; }, [onOfflineFlag]);
 
   const reportFlag = useCallback(
     (flagType: string, metadata?: Record<string, unknown>) => {
       const socket = getSocket();
-      if (!socket.connected) {
-        console.warn("[AntiCheat] socket not connected — attempting reconnect before flag emit");
-        socket.connect();
+      const meta   = metadata ?? {};
+
+      // If offline or socket not reachable, queue locally instead of dropping
+      if (!navigator.onLine || !socket.connected) {
+        onOfflineFlagRef.current?.(flagType, meta);
+        // Still try the socket in case the connection recovers quickly
+        if (!socket.connected) socket.connect();
       }
-      console.log("[AntiCheat] emit flag:", flagType, metadata);
-      socket.emit("flag:report", { sessionId, flagType, metadata });
+
+      socket.emit("flag:report", { sessionId, flagType, metadata: meta });
     },
     [sessionId],
   );

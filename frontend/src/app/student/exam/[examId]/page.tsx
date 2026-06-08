@@ -10,11 +10,23 @@ import { BlockList } from "@/components/exams/blocks";
 import {
   cacheQuestions,
   getCachedQuestions,
+  cacheFullExam,
+  getCachedExam,
   saveLocalAnswers,
   loadLocalAnswers,
   clearLocalAnswers,
   mergeAnswers,
-} from "@/lib/examCache";
+  saveAnswerIDB,
+  clearAnswersIDB,
+  loadAnswersIDB,
+  saveSessionState,
+  loadSessionState,
+  clearSessionState,
+  queueIntegrityLog,
+  enqueueSyncItem,
+} from "@/lib/offlineDB";
+import { initSyncQueue, destroySyncQueue, enqueueSyncOp, triggerSync } from "@/lib/syncQueue";
+import { OfflineIndicator } from "@/components/exam/OfflineIndicator";
 import { perfStart } from "@/lib/perf";
 
 const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
@@ -82,6 +94,32 @@ export default function ExamTakingPage() {
     isMobileRef.current = mobile;
   }, []);
 
+  /* ── online / offline ─── */
+  const [isOnline, setIsOnline] = useState(true);
+  useEffect(() => {
+    setIsOnline(navigator.onLine);
+    const up   = () => { setIsOnline(true);  triggerSync(); };
+    const down = () => setIsOnline(false);
+    window.addEventListener("online",  up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online",  up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+
+  /* ── sync queue bootstrap ─── */
+  useEffect(() => {
+    // getToken reads from whatever key the API client uses for auth
+    const getToken = () =>
+      localStorage.getItem("token") ||
+      localStorage.getItem("accessToken") ||
+      sessionStorage.getItem("token") ||
+      null;
+    initSyncQueue(getToken);
+    return () => destroySyncQueue();
+  }, []);
+
   /* ── fullscreen ─── */
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsWarning, setFsWarning] = useState(false);
@@ -102,7 +140,17 @@ export default function ExamTakingPage() {
   const timeCritical = timeLeft > 0 && timeLeft <= 60;
   const timeWarning = timeLeft > 0 && timeLeft <= 300 && !timeCritical;
 
-  useAntiCheat({ sessionId, enabled: phase === "taking" });
+  useAntiCheat({
+    sessionId,
+    enabled: phase === "taking",
+    // When offline, persist integrity flags to IDB; syncQueue will flush them later
+    onOfflineFlag: useCallback(
+      (flagType: string, metadata: Record<string, unknown>) => {
+        if (sessionId) queueIntegrityLog(sessionId, flagType, metadata).catch(() => {});
+      },
+      [sessionId]
+    ),
+  });
 
   /* ─── Geofence polling (45 s, only while taking) ─ */
   useEffect(() => {
@@ -166,13 +214,26 @@ export default function ExamTakingPage() {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      // 1) Instant render from IndexedDB cache (if we have it from a prior visit)
-      getCachedQuestions(examId).then((cached) => {
-        if (!cancelled && cached && cached.length) {
-          setQuestions((prev) => (prev.length ? prev : (cached as Question[])));
+      // 1) Offline-first: show cached exam data immediately so the page renders
+      //    even without a network connection.
+      const cachedExam = await getCachedExam(examId);
+      if (!cancelled && cachedExam) {
+        if (cachedExam.meta && Object.keys(cachedExam.meta).length) {
+          setExam(cachedExam.meta);
         }
-      });
+        if (cachedExam.questions?.length) {
+          setQuestions(cachedExam.questions as Question[]);
+        }
+      } else {
+        // Fallback: question-only cache (from previous version)
+        getCachedQuestions(examId).then((cached) => {
+          if (!cancelled && cached && cached.length) {
+            setQuestions((prev) => (prev.length ? prev : (cached as Question[])));
+          }
+        });
+      }
 
+      // 2) Try to fetch fresh data from the network
       try {
         const endFetch = perfStart("exam_fetch");
         const { data } = await api.get(`/exams/${examId}`);
@@ -181,10 +242,21 @@ export default function ExamTakingPage() {
         setExam(data.data);
         const freshQuestions: Question[] = data.data.questions || [];
         setQuestions(freshQuestions);
-        // Refresh the question cache in the background for next time
-        cacheQuestions(examId, freshQuestions);
 
-        // Check if the student already has an active session (page refresh restore)
+        // Persist full exam bundle to IndexedDB for offline use
+        cacheFullExam({
+          examId,
+          meta:         data.data,
+          questions:    freshQuestions,
+          instructions: data.data.instructions ?? null,
+          settings:     {
+            durationMinutes: data.data.durationMinutes,
+            allowBacktrack:  data.data.allowBacktrack,
+            examPassword:    !!data.data.examPassword,
+          },
+        });
+
+        // 3) Check if the student already has an active session (page refresh restore)
         try {
           const { data: activeData } = await api.get(`/sessions/my-active?examId=${examId}`);
           if (cancelled) return;
@@ -192,16 +264,24 @@ export default function ExamTakingPage() {
             const { session: s, recoveredAnswers, remaining, alreadyExpired } = activeData.data;
             setSession(s);
 
-            // Merge server-recovered answers with locally-persisted ones.
-            // Local answers win because they include keystrokes that may not
-            // have reached the server yet (slow network / abrupt refresh).
-            const local = loadLocalAnswers(s.id);
-            const merged = mergeAnswers(recoveredAnswers, local);
+            // Merge server-recovered answers + IDB answers + localStorage answers.
+            // Priority: local (most recent keystroke) > server-recovered > nothing.
+            const [idbAnswers, localAnswers] = await Promise.all([
+              loadAnswersIDB(s.id),
+              Promise.resolve(loadLocalAnswers(s.id)),
+            ]);
+            const merged = mergeAnswers(mergeAnswers(recoveredAnswers, idbAnswers), localAnswers);
             if (Object.keys(merged).length) {
               setAnswers(merged);
-              saveLocalAnswers(s.id, merged); // re-persist the unified set
+              saveLocalAnswers(s.id, merged);
             }
             setTimeLeft(Math.max(0, remaining));
+
+            // Restore last visited question index from IDB
+            const savedState = await loadSessionState(s.id);
+            if (savedState && savedState.currentIndex > 0) {
+              setCurrentIndex(savedState.currentIndex);
+            }
 
             const socket = connectSocket();
             socket.emit("join:exam", { sessionId: s.id, examId });
@@ -210,27 +290,41 @@ export default function ExamTakingPage() {
               if (success) setLastSaved(new Date());
             });
 
-            // Log this page refresh for integrity monitoring (non-blocking)
-            api.post(`/sessions/${s.id}/log-refresh`, {}).catch(() => {});
+            // Log page refresh — queue if offline
+            if (navigator.onLine) {
+              api.post(`/sessions/${s.id}/log-refresh`, {}).catch(() => {
+                enqueueSyncOp("LOG_REFRESH", s.id, { source: "page_refresh" });
+              });
+            } else {
+              enqueueSyncOp("LOG_REFRESH", s.id, { source: "page_refresh" });
+            }
 
             setPhase("taking");
-            // Enter fullscreen on desktop only
             if (!isMobileRef.current && !alreadyExpired) {
               setTimeout(() => enterFullscreen(), 150);
             }
             return;
           }
         } catch {
-          // No active session found — proceed to normal entry flow
+          // No active session on server; check if we have an IDB session state
+          // (handles the case where the student is offline and the session API fails)
         }
 
         setPhase(data.data.examPassword ? "password" : "ready");
       } catch {
-        if (!cancelled) router.replace("/student");
+        // Network fully unavailable
+        if (cancelled) return;
+        if (cachedExam) {
+          // We have the exam cached — show entry screen from cache
+          setPhase(cachedExam.settings?.examPassword ? "password" : "ready");
+        } else {
+          router.replace("/student");
+        }
       }
     };
     load();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId, router]);
 
   /* ─── Phase 2: start session ──────────────────── */
@@ -287,10 +381,30 @@ export default function ExamTakingPage() {
       const socket = connectSocket();
       socket.emit("join:exam", { sessionId: data.data.session.id, examId });
 
-      // Auto-save via socket
       socket.on("answer:saved", ({ success }: { success: boolean }) => {
         setIsSaving(false);
         if (success) setLastSaved(new Date());
+      });
+
+      // Seed session state so we can restore currentIndex on reload
+      saveSessionState({
+        sessionId: newSession.id,
+        currentIndex: 0,
+        phase: "taking",
+        startedAt: new Date().toISOString(),
+      });
+
+      // Ensure the full exam bundle is in IDB for offline use
+      cacheFullExam({
+        examId,
+        meta:         exam,
+        questions:    questions,
+        instructions: exam.instructions ?? null,
+        settings:     {
+          durationMinutes: exam.durationMinutes,
+          allowBacktrack:  exam.allowBacktrack,
+          examPassword:    !!exam.examPassword,
+        },
       });
 
       setPhase("taking");
@@ -348,47 +462,94 @@ export default function ExamTakingPage() {
   /* ─── Periodic autosave (every 30 s) ─────────── */
   useEffect(() => {
     if (phase !== "taking" || !sessionId) return;
-    const socket = connectSocket();
     const t = setInterval(() => {
-      setIsSaving(true);
-      socket.emit("answer:save", { sessionId, answers: answersRef.current });
-    }, 30000);
+      if (navigator.onLine) {
+        const socket = connectSocket();
+        setIsSaving(true);
+        socket.emit("answer:save", { sessionId, answers: answersRef.current });
+      } else {
+        // Offline: enqueue a batched write; syncQueue will flush when back online
+        enqueueSyncOp("AUTOSAVE", sessionId, { answers: answersRef.current }).catch(() => {});
+      }
+    }, 30_000);
     return () => clearInterval(t);
   }, [phase, sessionId]);
 
   /* ─── Immediate save helper ───────────────────── */
   async function saveNow() {
     if (!sessionId) return;
+    if (!navigator.onLine) {
+      // Persist locally and queue for later — don't show a spinner
+      await enqueueSyncOp("AUTOSAVE", sessionId, { answers: answersRef.current });
+      return;
+    }
     try {
       setIsSaving(true);
       await api.post(`/sessions/${sessionId}/autosave`, { answers: answersRef.current });
       setLastSaved(new Date());
-    } catch {} finally { setIsSaving(false); }
+    } catch {
+      // Network error mid-save — enqueue so it retries on reconnect
+      await enqueueSyncOp("AUTOSAVE", sessionId, { answers: answersRef.current });
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   /* ─── Submit ──────────────────────────────────── */
   const handleSubmit = useCallback(async (auto = false) => {
     if (isSubmitting || !sessionId) return;
     setIsSubmitting(true);
+
+    // Merge in-memory + localStorage + IDB answers so nothing is lost
+    const idbAnswers   = await loadAnswersIDB(sessionId).catch(() => ({}));
+    const localAnswers = loadLocalAnswers(sessionId);
+    const finalAnswers = mergeAnswers(mergeAnswers(answersRef.current, idbAnswers), localAnswers);
+    const answerList   = Object.entries(finalAnswers).map(([questionId, answer]) => ({ questionId, answer }));
+
+    // If offline, queue the submission and notify the student
+    if (!navigator.onLine) {
+      await enqueueSyncOp("SUBMIT", sessionId, { sessionId, answers: finalAnswers });
+      setIsSubmitting(false);
+      alert(
+        "You are currently offline. Your exam answers have been saved locally and will be submitted automatically when your connection is restored."
+      );
+      return;
+    }
+
     try {
-      // Final synchronization: the source of truth is the merged local +
-      // in-memory answer map, so nothing typed just before submit is dropped.
-      const finalAnswers = mergeAnswers(answersRef.current, loadLocalAnswers(sessionId));
-      const answerList = Object.entries(finalAnswers).map(([questionId, answer]) => ({ questionId, answer }));
       const { data } = await api.post(`/sessions/${sessionId}/submit`, { answers: answerList });
       connectSocket().emit("exam:submit", { sessionId });
-      clearLocalAnswers(sessionId); // safe to drop once accepted by server
+
+      // Clean up local stores on successful server-side submission
+      clearLocalAnswers(sessionId);
+      clearAnswersIDB(sessionId).catch(() => {});
+      clearSessionState(sessionId).catch(() => {});
+
       setShowSubmitModal(false);
       setResult({ score: data.data.score, maxScore: data.data.maxScore, percentage: data.data.percentage });
       setPhase("submitted");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       if (auto) setTimeout(() => router.push("/student"), 4000);
     } catch (err: any) {
-      alert(err.response?.data?.error?.message || "Submission failed");
+      // Network error during submit — queue it and inform student
+      if (!navigator.onLine || err?.code === "ERR_NETWORK") {
+        await enqueueSyncOp("SUBMIT", sessionId, { sessionId, answers: finalAnswers });
+        alert(
+          "Connection lost during submission. Your answers are saved and will be submitted automatically when you reconnect."
+        );
+      } else {
+        alert(err.response?.data?.error?.message || "Submission failed. Please try again.");
+      }
     } finally {
       setIsSubmitting(false);
     }
   }, [isSubmitting, sessionId, router]);
+
+  /* ─── Persist current question index to IDB on every navigation ─── */
+  useEffect(() => {
+    if (!sessionId || phase !== "taking") return;
+    saveSessionState({ sessionId, currentIndex, phase: "taking" });
+  }, [sessionId, currentIndex, phase]);
 
   /* ─── Auto-submit if session restored with zero time remaining ─── */
   const hasAutoSubmittedRef = useRef(false);
@@ -406,19 +567,26 @@ export default function ExamTakingPage() {
     // 1) Optimistic UI update — student keeps moving immediately.
     setAnswers((prev) => {
       const next = { ...prev, [questionId]: value };
-      // 2) DURABLE local save (synchronous) — answer can never be lost to a
-      //    refresh, disconnect, or crash, even before it reaches the server.
+      // 2a) Synchronous localStorage save — survives hard crashes/refreshes.
       if (sessionId) saveLocalAnswers(sessionId, next);
       return next;
     });
 
-    // 3) Debounced background sync to the server (batched with other edits).
+    // 2b) Async IDB save for richer offline restore (non-blocking).
+    if (sessionId) saveAnswerIDB(sessionId, questionId, value).catch(() => {/* ignore */});
+
+    // 3) Debounced server sync — via socket when online, queued when offline.
     if (answerSaveTimerRef.current) clearTimeout(answerSaveTimerRef.current);
     if (sessionId) {
       answerSaveTimerRef.current = setTimeout(() => {
-        const socket = connectSocket();
-        setIsSaving(true);
-        socket.emit("answer:save", { sessionId, answers: answersRef.current });
+        if (navigator.onLine) {
+          const socket = connectSocket();
+          setIsSaving(true);
+          socket.emit("answer:save", { sessionId, answers: answersRef.current });
+        } else {
+          // Queue to be synced when connectivity returns
+          enqueueSyncOp("AUTOSAVE", sessionId, { answers: answersRef.current });
+        }
       }, 1500);
     }
   }
@@ -810,6 +978,8 @@ export default function ExamTakingPage() {
         isMobile ? "fixed inset-0 z-[9999]" : "h-screen"
       }`}
     >
+      {/* Floating online/offline status indicator */}
+      <OfflineIndicator />
       {/*
         Hidden file input — gives the anti-cheat hook a real DOM target for
         "Opening the file picker" detection.  It is visually invisible and

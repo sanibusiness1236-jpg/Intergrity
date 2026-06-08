@@ -6,10 +6,6 @@ const nextConfig: NextConfig = {
   // Compress all responses (text, JSON, HTML) — big win for slow connections
   compress: true,
 
-  // Serve pre-built pages from the edge cache as long as possible
-  // Individual pages that need fresh data use revalidate in their fetch calls
-  // (these are mostly client-rendered anyway, so this is belt-and-braces)
-
   // Image optimisation — allow local /public images and the Supabase CDN
   images: {
     remotePatterns: [
@@ -19,12 +15,10 @@ const nextConfig: NextConfig = {
         pathname: "/storage/v1/object/public/**",
       },
     ],
-    // Serve WebP / AVIF automatically (smaller than PNG/JPEG)
     formats: ["image/avif", "image/webp"],
   },
 
-  // Turbopack-compatible: split heavy libs into their own chunks so
-  // students loading only the exam page don't pull in recharts/leaflet
+  // Turbopack-compatible: split heavy libs into their own chunks
   experimental: {
     optimizePackageImports: [
       "recharts",
@@ -34,6 +28,51 @@ const nextConfig: NextConfig = {
       "prismjs",
       "katex",
     ],
+  },
+
+  // Custom headers for Service Worker and PWA files
+  async headers() {
+    return [
+      {
+        // Service Worker must be served with no-cache so updates propagate immediately
+        source: "/sw.js",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-cache, no-store, must-revalidate",
+          },
+          {
+            // Allow the SW to control all paths under /
+            key: "Service-Worker-Allowed",
+            value: "/",
+          },
+          {
+            key: "X-Content-Type-Options",
+            value: "nosniff",
+          },
+        ],
+      },
+      {
+        // Manifest — short TTL so installs pick up icon/name changes quickly
+        source: "/manifest.json",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=300",
+          },
+        ],
+      },
+      {
+        // Offline fallback page
+        source: "/offline.html",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400",
+          },
+        ],
+      },
+    ];
   },
 };
 
