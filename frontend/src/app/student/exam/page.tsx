@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { loadCachedExams, saveCachedExams, cacheQuestions } from "@/lib/examCache";
 import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/DashboardShell";
 import { AnnouncementBadge } from "@/components/dashboard/AnnouncementBadge";
 import { GradientHeading } from "@/components/dashboard/GradientHeading";
@@ -81,17 +82,39 @@ export default function StudentExamsListPage() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    setLoading(true);
+
+    // Instant paint from cached exams, then refresh in the background.
+    const cached = loadCachedExams();
+    if (cached?.data?.length) {
+      setExams(cached.data as Exam[]);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
     Promise.all([
       api.get("/exams").then((r) => r.data.data as Exam[]).catch(() => []),
       api.get(`/students/${user.id}/exams`).then((r) => r.data.data as SessionWithExam[]).catch(() => []),
     ]).then(([examList, sessList]) => {
       if (cancelled) return;
+      if (examList.length) saveCachedExams(examList);
       setExams(examList);
       setSessions(sessList);  // already sorted desc by createdAt
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [user]);
+
+  /* Prefetch an exam's questions so the exam page opens instantly. */
+  const prefetchExam = useMemo(() => {
+    const prefetched = new Set<string>();
+    return (examId: string) => {
+      if (prefetched.has(examId)) return;
+      prefetched.add(examId);
+      api.get(`/exams/${examId}`)
+        .then(({ data }) => cacheQuestions(examId, data.data.questions || []))
+        .catch(() => prefetched.delete(examId));
+    };
+  }, []);
 
   const rows = useMemo<ExamRow[]>(() => {
     // Group sessions by examId (array already desc by createdAt, so [0] = latest)
@@ -266,7 +289,7 @@ export default function StudentExamsListPage() {
         ) : (
           <div className="space-y-2">
             {visible.map((row) => (
-              <ExamCard key={`${row.exam.id}-${row.kind}`} row={row} />
+              <ExamCard key={`${row.exam.id}-${row.kind}`} row={row} onPrefetch={prefetchExam} />
             ))}
           </div>
         )}
@@ -276,7 +299,7 @@ export default function StudentExamsListPage() {
 }
 
 /* ─────────────────────────────────────────────── */
-function ExamCard({ row }: { row: ExamRow }) {
+function ExamCard({ row, onPrefetch }: { row: ExamRow; onPrefetch?: (examId: string) => void }) {
   const { exam, session, kind, startTime, endTime, durationMinutes, completedCount, maxAttempts } = row;
   const startStr = fmtDate(startTime);
   const endStr   = fmtDate(endTime);
@@ -357,8 +380,18 @@ function ExamCard({ row }: { row: ExamRow }) {
     );
   })();
 
+  // Prefetch questions when the student shows intent (hover / focus) so the
+  // exam page can render instantly when they click Start/Resume.
+  const intentPrefetch =
+    onPrefetch && (kind === "available" || kind === "in_progress")
+      ? () => onPrefetch(exam.id)
+      : undefined;
+
   return (
-    <div className="group flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 transition hover:border-white/20 hover:bg-white/[0.04]">
+    <div
+      onMouseEnter={intentPrefetch}
+      onFocus={intentPrefetch}
+      className="group flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 transition hover:border-white/20 hover:bg-white/[0.04]">
       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-indigo-300 transition group-hover:border-indigo-400/30 group-hover:bg-indigo-500/10">
         <Icon d="M9 12h6M9 16h6M9 8h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" size={20} />
       </div>

@@ -249,6 +249,9 @@ model ExamSession {
   @@index([studentId])
   @@index([examId])
   @@index([examId, status])
+  @@index([studentId, status])
+  @@index([studentId, examId])
+  @@index([examId, ipAddress])
   @@map("exam_sessions")
 }
 
@@ -282,6 +285,8 @@ model BehavioralFlag {
 
   @@index([sessionId])
   @@index([studentId])
+  @@index([flagType])
+  @@index([flagType, sessionId])
   @@map("behavioral_flags")
 }
 

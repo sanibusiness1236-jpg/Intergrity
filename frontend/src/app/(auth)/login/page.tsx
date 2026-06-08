@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
 import { AuthShell } from "@/components/auth/AuthShell";
@@ -117,9 +118,9 @@ function LoginForm() {
             <input type="checkbox" className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 accent-indigo-500" />
             Remember me
           </label>
-          <a href="#" className="text-white/60 transition-colors hover:text-white">
+          <Link href="/reset-password" className="text-white/60 transition-colors hover:text-white">
             Forgot password?
-          </a>
+          </Link>
         </div>
 
         <button

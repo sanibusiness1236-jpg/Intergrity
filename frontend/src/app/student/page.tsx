@@ -5,6 +5,8 @@ import Link from "next/link";
 import Image from "next/image";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { loadCachedExams, saveCachedExams, cacheQuestions } from "@/lib/examCache";
+import { perfMark, perfMeasure, perfStart } from "@/lib/perf";
 import { DashboardShell, GlowButton, GlowCard } from "@/components/dashboard/DashboardShell";
 import { AnnouncementBadge } from "@/components/dashboard/AnnouncementBadge";
 import { GradientHeading } from "@/components/dashboard/GradientHeading";
@@ -45,19 +47,33 @@ export default function StudentDashboard() {
 
   useEffect(() => {
     if (!user) return;
+    perfMark("dashboard_load_start");
+
+    // 1) Instant paint from cached exams (background refresh follows).
+    const cached = loadCachedExams();
+    if (cached?.data?.length) {
+      setAvailableExams((cached.data as Exam[]).filter(isAvailableNow));
+      setLoading(false); // we already have something to show
+    }
 
     // Pre-warm the backend so subsequent API calls don't hit a cold start
     api.get("/health").catch(() => {});
 
+    const endLoad = perfStart("dashboard_data_fetch");
     Promise.all([
       api.get(`/students/${user.id}/exams`).then(({ data }) => {
         setSessions(data.data || []);
       }).catch(() => {}),
       api.get("/exams").then(({ data }) => {
         const all: Exam[] = data.data || [];
+        saveCachedExams(all); // refresh cache for next visit
         setAvailableExams(all.filter(isAvailableNow));
       }).catch(() => {}),
-    ]).finally(() => setLoading(false));
+    ]).finally(() => {
+      setLoading(false);
+      endLoad();
+      perfMeasure("login_to_dashboard", "dashboard_load_start");
+    });
   }, [user]);
 
   const total = sessions.length;
@@ -201,7 +217,14 @@ export default function StudentDashboard() {
             <GlowCard title="Available Now" description="These exams are open — click Start to begin.">
               <ul className="space-y-2">
                 {newlyAvailable.map((exam) => (
-                  <li key={exam.id} className="flex items-center gap-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/30 hover:bg-emerald-500/10">
+                  <li
+                    key={exam.id}
+                    onMouseEnter={() => {
+                      api.get(`/exams/${exam.id}`)
+                        .then(({ data }) => cacheQuestions(exam.id, data.data.questions || []))
+                        .catch(() => {});
+                    }}
+                    className="flex items-center gap-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/30 hover:bg-emerald-500/10">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10">
                       <Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" size={16} />
                     </div>

@@ -7,6 +7,15 @@ import { connectSocket, disconnectSocket } from "@/lib/socket";
 import { useAntiCheat } from "@/hooks/useAntiCheat";
 import type { Question } from "@/types";
 import { BlockList } from "@/components/exams/blocks";
+import {
+  cacheQuestions,
+  getCachedQuestions,
+  saveLocalAnswers,
+  loadLocalAnswers,
+  clearLocalAnswers,
+  mergeAnswers,
+} from "@/lib/examCache";
+import { perfStart } from "@/lib/perf";
 
 const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -157,11 +166,23 @@ export default function ExamTakingPage() {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
+      // 1) Instant render from IndexedDB cache (if we have it from a prior visit)
+      getCachedQuestions(examId).then((cached) => {
+        if (!cancelled && cached && cached.length) {
+          setQuestions((prev) => (prev.length ? prev : (cached as Question[])));
+        }
+      });
+
       try {
+        const endFetch = perfStart("exam_fetch");
         const { data } = await api.get(`/exams/${examId}`);
+        endFetch();
         if (cancelled) return;
         setExam(data.data);
-        setQuestions(data.data.questions || []);
+        const freshQuestions: Question[] = data.data.questions || [];
+        setQuestions(freshQuestions);
+        // Refresh the question cache in the background for next time
+        cacheQuestions(examId, freshQuestions);
 
         // Check if the student already has an active session (page refresh restore)
         try {
@@ -170,7 +191,16 @@ export default function ExamTakingPage() {
           if (activeData.data) {
             const { session: s, recoveredAnswers, remaining, alreadyExpired } = activeData.data;
             setSession(s);
-            if (recoveredAnswers) setAnswers(recoveredAnswers);
+
+            // Merge server-recovered answers with locally-persisted ones.
+            // Local answers win because they include keystrokes that may not
+            // have reached the server yet (slow network / abrupt refresh).
+            const local = loadLocalAnswers(s.id);
+            const merged = mergeAnswers(recoveredAnswers, local);
+            if (Object.keys(merged).length) {
+              setAnswers(merged);
+              saveLocalAnswers(s.id, merged); // re-persist the unified set
+            }
             setTimeLeft(Math.max(0, remaining));
 
             const socket = connectSocket();
@@ -237,13 +267,21 @@ export default function ExamTakingPage() {
         password: exam?.examPassword ? password : undefined,
         venueId: selectedVenueId || undefined,
       });
-      setSession(data.data.session);
+      const newSession = data.data.session;
+      setSession(newSession);
       setAttemptInfo({
         attemptNumber: data.data.attemptNumber,
         attemptsUsed: data.data.attemptsUsed,
         maxAttempts: data.data.maxAttempts,
       });
-      if (data.data.recoveredAnswers) setAnswers(data.data.recoveredAnswers);
+      // Merge any locally-persisted answers (e.g. resuming a session) with
+      // what the server recovered — local non-empty values win.
+      const local = loadLocalAnswers(newSession.id);
+      const merged = mergeAnswers(data.data.recoveredAnswers, local);
+      if (Object.keys(merged).length) {
+        setAnswers(merged);
+        saveLocalAnswers(newSession.id, merged);
+      }
       setTimeLeft(exam.durationMinutes * 60);
 
       const socket = connectSocket();
@@ -333,9 +371,13 @@ export default function ExamTakingPage() {
     if (isSubmitting || !sessionId) return;
     setIsSubmitting(true);
     try {
-      const answerList = Object.entries(answersRef.current).map(([questionId, answer]) => ({ questionId, answer }));
+      // Final synchronization: the source of truth is the merged local +
+      // in-memory answer map, so nothing typed just before submit is dropped.
+      const finalAnswers = mergeAnswers(answersRef.current, loadLocalAnswers(sessionId));
+      const answerList = Object.entries(finalAnswers).map(([questionId, answer]) => ({ questionId, answer }));
       const { data } = await api.post(`/sessions/${sessionId}/submit`, { answers: answerList });
       connectSocket().emit("exam:submit", { sessionId });
+      clearLocalAnswers(sessionId); // safe to drop once accepted by server
       setShowSubmitModal(false);
       setResult({ score: data.data.score, maxScore: data.data.maxScore, percentage: data.data.percentage });
       setPhase("submitted");
@@ -361,8 +403,16 @@ export default function ExamTakingPage() {
   const answerSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function setAnswer(questionId: string, value: unknown) {
-    setAnswers((prev) => ({ ...prev, [questionId]: value }));
-    // Debounced immediate save: fires 1.5 s after the last answer change
+    // 1) Optimistic UI update — student keeps moving immediately.
+    setAnswers((prev) => {
+      const next = { ...prev, [questionId]: value };
+      // 2) DURABLE local save (synchronous) — answer can never be lost to a
+      //    refresh, disconnect, or crash, even before it reaches the server.
+      if (sessionId) saveLocalAnswers(sessionId, next);
+      return next;
+    });
+
+    // 3) Debounced background sync to the server (batched with other edits).
     if (answerSaveTimerRef.current) clearTimeout(answerSaveTimerRef.current);
     if (sessionId) {
       answerSaveTimerRef.current = setTimeout(() => {

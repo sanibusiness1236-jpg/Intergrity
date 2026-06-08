@@ -35,6 +35,22 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+// ── Performance monitoring ──
+// Log any request slower than the threshold so bottlenecks under heavy
+// concurrent load are visible in the server logs.
+const SLOW_REQUEST_MS = Number(process.env.SLOW_REQUEST_MS || 800);
+app.use((req, res, next) => {
+  const start = process.hrtime.bigint();
+  res.on("finish", () => {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    if (ms >= SLOW_REQUEST_MS) {
+      // eslint-disable-next-line no-console
+      console.warn(`[perf] SLOW ${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(0)}ms`);
+    }
+  });
+  next();
+});
+
 // ── Lightweight cache helper for authenticated GET responses ──
 // Browsers and CDNs will reuse the response for `seconds` without
 // hitting the DB again.  We only do this on safe, idempotent endpoints.

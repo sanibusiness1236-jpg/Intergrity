@@ -85,6 +85,30 @@ async function getExams(req, res, next) {
       where.status = req.query.status;
     }
 
+    // ── Student path: lean SELECT, no examiner-only joins/aggregates ──
+    // Students only need exam metadata to render their list; skipping the
+    // createdBy join and the submitted-count groupBy removes one full query
+    // and shrinks the payload, which matters under heavy concurrent load.
+    if (req.user.role === "STUDENT") {
+      const studentExams = await prisma.exam.findMany({
+        where,
+        select: {
+          id: true, title: true, courseCode: true, courseName: true,
+          examType: true, status: true, isActive: true,
+          startTime: true, endTime: true, durationMinutes: true,
+          totalMarks: true, maxAttempts: true, examPassword: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      // Don't leak the actual password — just whether one is required.
+      const sanitized = studentExams.map(({ examPassword, ...e }) => ({
+        ...e,
+        examPassword: examPassword ? true : null,
+      }));
+      return res.json({ success: true, data: sanitized });
+    }
+
     const exams = await prisma.exam.findMany({
       where,
       include: {

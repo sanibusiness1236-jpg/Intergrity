@@ -171,6 +171,50 @@ async function detectMultiDeviceLogin(studentId, currentIp, currentUserAgent) {
   }
 }
 
+/**
+ * POST /auth/reset-password
+ * Self-service password reset for students. Because there is no email
+ * delivery configured, identity is verified by matching BOTH the account
+ * email and the student ID on record. Only STUDENT accounts can use this.
+ */
+async function resetPassword(req, res, next) {
+  try {
+    const { email, studentId, newPassword } = req.body;
+
+    if (!email || !studentId || !newPassword) {
+      throw new AppError("Email, student ID and new password are required.", 400);
+    }
+    if (String(newPassword).length < 6) {
+      throw new AppError("New password must be at least 6 characters.", 400);
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: String(email).trim() } });
+
+    // Always respond the same way for non-matching identities to avoid leaking
+    // which emails exist, but still enforce the student-ID + role checks.
+    const identityOk =
+      user &&
+      user.role === "STUDENT" &&
+      user.isActive &&
+      user.studentId &&
+      String(user.studentId).trim().toLowerCase() === String(studentId).trim().toLowerCase();
+
+    if (!identityOk) {
+      throw new AppError(
+        "We couldn't verify your identity. Check your email and student ID, or contact your examiner.",
+        400
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+
+    res.json({ success: true, message: "Password reset successful. You can now sign in." });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function refreshToken(req, res, next) {
   try {
     const { refreshToken: token } = req.body;
@@ -209,4 +253,4 @@ async function getProfile(req, res, next) {
   }
 }
 
-module.exports = { register, login, refreshToken, getProfile };
+module.exports = { register, login, refreshToken, getProfile, resetPassword };
