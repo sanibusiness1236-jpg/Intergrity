@@ -663,21 +663,26 @@ export default function ExamTakingPage() {
 
   /* Result screen */
   if (phase === "submitted" && result) {
-    const pct = Number(result.percentage);
+    const pct = Number(result.percentage) || 0;
     const pass = pct >= 50;
     // attemptsUsed = count before this attempt; add 1 for current → retake if still under cap
     const canRetake = attemptInfo && (attemptInfo.attemptsUsed + 1) < attemptInfo.maxAttempts;
 
+    // Range match coerces min/max to numbers — JSON stored from number inputs
+    // can arrive as strings, which silently breaks >= / <= comparisons.
+    const inRange = (min: unknown, max: unknown) =>
+      pct >= Number(min) && pct <= Number(max);
+
     // Find the matching grade from gradingSystem (based on percentage)
     type GradeRow = { grade: string; min: number; max: number };
     const gradeRows = Array.isArray(exam?.gradingSystem) ? (exam.gradingSystem as GradeRow[]) : [];
-    const matchedGrade = gradeRows.find((g) => pct >= g.min && pct <= g.max);
+    const matchedGrade = gradeRows.find((g) => inRange(g.min, g.max));
 
     // Find the matching remark from scoreRemarks (based on percentage)
     type RemarkRow = { min: number; max: number; remark: string };
     const remarkRows = Array.isArray(exam?.scoreRemarks) ? (exam.scoreRemarks as RemarkRow[]) : [];
     const matchedRemark = exam?.showRemarksToStudents
-      ? remarkRows.find((r) => pct >= r.min && pct <= r.max)
+      ? remarkRows.find((r) => inRange(r.min, r.max))
       : null;
 
     return (
