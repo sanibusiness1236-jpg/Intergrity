@@ -28,6 +28,7 @@ enum QuestionType {
   TRUE_FALSE
   FILL_IN_BLANK
   MULTI_BLANK_EQUATION
+  TEMPLATE_FILL
 }
 
 enum ExamType {

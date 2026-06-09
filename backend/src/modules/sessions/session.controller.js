@@ -352,6 +352,36 @@ function gradeAnswer(question, studentAnswer) {
     return { isCorrect, score: isCorrect ? marks : 0 };
   }
 
+  if (type === "TEMPLATE_FILL") {
+    // correctAnswer: { BLANK_1: { answers: string[], caseSensitive: boolean }, ... }
+    // studentAnswer: { BLANK_1: "value", BLANK_2: "value", ... }
+    if (!correctAnswer || typeof correctAnswer !== "object" || Array.isArray(correctAnswer)) {
+      return { isCorrect: false, score: 0 };
+    }
+    if (!studentAnswer || typeof studentAnswer !== "object" || Array.isArray(studentAnswer)) {
+      return { isCorrect: false, score: 0 };
+    }
+    const blanks = Object.keys(correctAnswer);
+    if (blanks.length === 0) return { isCorrect: false, score: 0 };
+    let correct = 0;
+    for (const blankId of blanks) {
+      const spec = correctAnswer[blankId];
+      if (!spec || !Array.isArray(spec.answers)) continue;
+      const given = String(studentAnswer[blankId] ?? "").trim();
+      if (!given) continue;
+      const matched = spec.answers.some((ans) => {
+        const expected = String(ans ?? "").trim();
+        return spec.caseSensitive
+          ? expected === given
+          : expected.toLowerCase() === given.toLowerCase();
+      });
+      if (matched) correct++;
+    }
+    const fraction = correct / blanks.length;
+    const score = Math.round(marks * fraction);
+    return { isCorrect: fraction === 1, score };
+  }
+
   const isCorrect = JSON.stringify(correctAnswer) === JSON.stringify(studentAnswer);
   return { isCorrect, score: isCorrect ? marks : 0 };
 }

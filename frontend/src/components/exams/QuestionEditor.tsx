@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
@@ -16,12 +16,20 @@ import {
   TableBlock,
   uid,
 } from "./blocks";
+import {
+  TemplateFillCreator,
+  serializeTemplateFill,
+  deserializeTemplateFill,
+  type TemplateFillValue,
+} from "./TemplateFillCreator";
+import api from "@/lib/api";
 
 export const QTYPE_LABEL: Record<QuestionType, string> = {
   MCQ: "Multiple Choice",
   TRUE_FALSE: "True / False",
   FILL_IN_BLANK: "Fill in the Blank",
   MULTI_BLANK_EQUATION: "Multi-Blank Equation",
+  TEMPLATE_FILL: "Template Fill",
 };
 
 export const QTYPE_TONE: Record<QuestionType, string> = {
@@ -29,6 +37,7 @@ export const QTYPE_TONE: Record<QuestionType, string> = {
   TRUE_FALSE: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   FILL_IN_BLANK: "bg-blue-500/15 text-blue-300 border-blue-500/30",
   MULTI_BLANK_EQUATION: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  TEMPLATE_FILL: "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30",
 };
 
 export const QTYPE_ICON: Record<QuestionType, string> = {
@@ -36,12 +45,49 @@ export const QTYPE_ICON: Record<QuestionType, string> = {
   TRUE_FALSE: "M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z",
   FILL_IN_BLANK: "M3 6h18M3 12h18M3 18h12",
   MULTI_BLANK_EQUATION: "M7 8h10M7 12h4m0 4h6m-3-12v16",
+  TEMPLATE_FILL: "M9 17H7m10 0h-4m4-4H7m10 0h-2M7 9h10M7 5h4m6 0h-2",
 };
+
+// ─── Rich MCQ option ─────────────────────────────────────────────────────────
+export interface RichOption {
+  id: string;
+  displayType: "text" | "latex" | "image";
+  value: string;   // plain-text label used for correctAnswer matching
+  content: string; // for text: same as value; for latex: LaTeX source
+  url: string;     // for image: uploaded URL
+}
+
+export function emptyRichOption(): RichOption {
+  return { id: uid(), displayType: "text", value: "", content: "", url: "" };
+}
+
+function richOptToStorage(o: RichOption): unknown {
+  if (o.displayType === "text") return o.value;
+  return { displayType: o.displayType, value: o.value, content: o.content, url: o.url };
+}
+
+function storageToRichOpt(raw: unknown): RichOption {
+  if (typeof raw === "string") {
+    return { id: uid(), displayType: "text", value: raw, content: raw, url: "" };
+  }
+  if (raw && typeof raw === "object") {
+    const r = raw as Partial<RichOption>;
+    return {
+      id: uid(),
+      displayType: r.displayType ?? "text",
+      value: r.value ?? "",
+      content: r.content ?? r.value ?? "",
+      url: r.url ?? "",
+    };
+  }
+  return emptyRichOption();
+}
 
 export interface QuestionFormValue {
   type: QuestionType;
-  text: string;            // HTML (for non-multi-blank) or plain text (for multi-blank)
-  options: string[];
+  text: string;            // HTML (for most types) or plain text (multi-blank) or JSON (template_fill)
+  options: string[];       // kept for backward compat (mirrors richOptions[].value)
+  richOptions: RichOption[]; // MCQ options with optional LaTeX/image display
   correctAnswerStr: string;
   blanks: string[];
   marks: number;
@@ -50,6 +96,7 @@ export interface QuestionFormValue {
   acceptedAnswers: string[];   // FILL_IN_BLANK text-type: list of accepted answers
   caseSensitive: boolean;      // FILL_IN_BLANK text-type: case-sensitive matching
   blocks: Block[];
+  templateFill: TemplateFillValue | null; // TEMPLATE_FILL config + answer key
 }
 
 export function questionToForm(q: Partial<Question>): QuestionFormValue {
@@ -84,10 +131,24 @@ export function questionToForm(q: Partial<Question>): QuestionFormValue {
         ? String(q.correctAnswer ?? "")
         : "";
 
+  // Rich MCQ options (backward-compat: string[] or RichOption[])
+  const rawOptions = q.type === "MCQ" && Array.isArray(q.options) ? q.options : [];
+  const richOptions: RichOption[] =
+    rawOptions.length > 0
+      ? (rawOptions as unknown[]).map(storageToRichOpt)
+      : [emptyRichOption(), emptyRichOption(), emptyRichOption(), emptyRichOption()];
+
+  // TEMPLATE_FILL — deserialize JSON stored in `text`
+  let templateFill: TemplateFillValue | null = null;
+  if (q.type === "TEMPLATE_FILL" && q.text) {
+    templateFill = deserializeTemplateFill(q.text, q.correctAnswer);
+  }
+
   return {
     type: (q.type as QuestionType) || "MCQ",
-    text: q.text || "",
-    options: q.type === "MCQ" && Array.isArray(q.options) ? [...(q.options as string[])] : ["", "", "", ""],
+    text: q.type === "TEMPLATE_FILL" ? "" : (q.text || ""),
+    options: richOptions.map((o) => o.value),
+    richOptions,
     correctAnswerStr,
     blanks:
       q.type === "MULTI_BLANK_EQUATION" && Array.isArray(q.correctAnswer)
@@ -99,6 +160,7 @@ export function questionToForm(q: Partial<Question>): QuestionFormValue {
     acceptedAnswers,
     caseSensitive,
     blocks,
+    templateFill,
   };
 }
 
@@ -136,13 +198,25 @@ export function formToPayload(form: QuestionFormValue): {
   if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
 
   if (form.type === "MCQ") {
-    const opts = form.options.map((o) => o.trim()).filter(Boolean);
-    if (opts.length < 2) return { payload: null, error: "MCQ needs at least 2 options" };
-    if (!opts.includes(form.correctAnswerStr)) {
-      return { payload: null, error: "Select which option is correct" };
-    }
+    const richOpts = form.richOptions.filter((o) => {
+      if (o.displayType === "text") return o.value.trim() !== "";
+      if (o.displayType === "latex") return o.content.trim() !== "";
+      if (o.displayType === "image") return o.url.trim() !== "";
+      return false;
+    });
+    if (richOpts.length < 2) return { payload: null, error: "MCQ needs at least 2 options" };
+    const correctOpt = richOpts.find((o) => o.value === form.correctAnswerStr || o.id === form.correctAnswerStr);
+    if (!correctOpt) return { payload: null, error: "Select which option is correct" };
+    const serialisedOpts = richOpts.map(richOptToStorage);
     return {
-      payload: { type: "MCQ", text: form.text, options: opts, correctAnswer: form.correctAnswerStr, marks: form.marks, blocks } as Partial<Question>,
+      payload: {
+        type: "MCQ",
+        text: form.text,
+        options: serialisedOpts,
+        correctAnswer: correctOpt.value || correctOpt.id,
+        marks: form.marks,
+        blocks,
+      } as Partial<Question>,
       error: null,
     };
   }
@@ -209,6 +283,27 @@ export function formToPayload(form: QuestionFormValue): {
     };
   }
 
+  if (form.type === "TEMPLATE_FILL") {
+    if (!form.templateFill) return { payload: null, error: "Configure the template fill question" };
+    const { config, answerKey } = form.templateFill;
+    if (config.blankOrder.length === 0) return { payload: null, error: "Add at least one blank to the template" };
+    for (const id of config.blankOrder) {
+      const spec = answerKey[id];
+      const hasAnswer = spec?.answers?.some((a) => a.trim() !== "");
+      if (!hasAnswer) return { payload: null, error: `Provide at least one answer for ${id}` };
+    }
+    return {
+      payload: {
+        type: "TEMPLATE_FILL",
+        text: serializeTemplateFill(form.templateFill),
+        correctAnswer: answerKey,
+        marks: form.marks,
+        blocks,
+      } as Partial<Question>,
+      error: null,
+    };
+  }
+
   return { payload: null, error: "Unknown question type" };
 }
 
@@ -225,6 +320,67 @@ const Svg = ({ d, size = 14 }: { d: string; size?: number }) => (
     <path d={d} />
   </svg>
 );
+
+// ---------------------------------------------------------
+//  Inline-math popover for TipTap
+// ---------------------------------------------------------
+
+function MathPopover({ onInsert, onClose }: { onInsert: (html: string) => void; onClose: () => void }) {
+  const [latex, setLatex] = useState("");
+  const [preview, setPreview] = useState("");
+  const [err, setErr]   = useState("");
+
+  useEffect(() => {
+    (async () => {
+      if (!latex.trim()) { setPreview(""); setErr(""); return; }
+      try {
+        const katex = (await import("katex")).default;
+        const html = katex.renderToString(latex, { throwOnError: false, displayMode: false });
+        setPreview(html);
+        setErr("");
+      } catch (e) {
+        setErr(String(e));
+      }
+    })();
+  }, [latex]);
+
+  function insert() {
+    if (!preview) return;
+    // Wrap in a non-editable span; data-latex preserves the source
+    const span = `<span class="math-inline" contenteditable="false" data-latex="${latex.replace(/"/g, "&quot;")}"><span aria-hidden="true">${preview}</span></span>`;
+    onInsert(span);
+    onClose();
+  }
+
+  return (
+    <div className="absolute left-0 top-full z-50 mt-1 w-80 rounded-xl border border-white/10 bg-slate-950 p-3 shadow-2xl space-y-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Insert Inline Math (LaTeX)</p>
+      <textarea
+        autoFocus
+        className="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 font-mono text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-400"
+        rows={3}
+        placeholder="e.g. x^2 + y^2 = r^2"
+        value={latex}
+        onChange={(e) => setLatex(e.target.value)}
+      />
+      {err  && <p className="text-xs text-rose-300">{err}</p>}
+      {preview && !err && (
+        <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-white"
+          dangerouslySetInnerHTML={{ __html: preview }} />
+      )}
+      <div className="flex gap-2">
+        <button type="button" onClick={insert} disabled={!preview}
+          className="flex-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
+          Insert
+        </button>
+        <button type="button" onClick={onClose}
+          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60 hover:bg-white/10">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------
 //  Rich-text editor for question text (TipTap)
@@ -245,7 +401,6 @@ function RichQuestionText({
     immediatelyRender: false,
     onUpdate({ editor }) {
       const html = editor.getHTML();
-      // tiptap returns "<p></p>" for an empty editor — normalize to empty
       onChange(html === "<p></p>" ? "" : html);
     },
     editorProps: {
@@ -255,6 +410,9 @@ function RichQuestionText({
       },
     },
   });
+
+  const [showMath, setShowMath] = useState(false);
+  const mathBtnRef = useRef<HTMLButtonElement>(null);
 
   // Sync external value changes (e.g. when switching between editing different questions)
   useEffect(() => {
@@ -301,6 +459,32 @@ function RichQuestionText({
         {btn(() => editor.chain().focus().toggleOrderedList().run(), "1. List", editor.isActive("orderedList"), "Numbered list")}
         {btn(() => editor.chain().focus().toggleBlockquote().run(),  "❝",       editor.isActive("blockquote"),   "Quote")}
         {btn(() => editor.chain().focus().toggleCode().run(),         <span className="font-mono">{"<>"}</span>, editor.isActive("code"), "Inline code")}
+        <span className="mx-1 h-4 w-px bg-white/10" />
+        {/* ── Inline math button ── */}
+        <div className="relative">
+          <button
+            ref={mathBtnRef}
+            type="button"
+            title="Insert inline math (LaTeX)"
+            onMouseDown={(e) => { e.preventDefault(); setShowMath((v) => !v); }}
+            className={`flex h-7 items-center gap-1 rounded px-2 text-xs font-bold transition ${
+              showMath
+                ? "bg-purple-500/30 text-purple-100 ring-1 ring-purple-400/40"
+                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200"
+            }`}
+          >
+            ∑ Math
+          </button>
+          {showMath && (
+            <MathPopover
+              onInsert={(html) => {
+                editor.chain().focus().insertContent(html).run();
+                onChange(editor.getHTML());
+              }}
+              onClose={() => setShowMath(false)}
+            />
+          )}
+        </div>
       </div>
       <EditorContent editor={editor} />
     </div>
@@ -376,6 +560,207 @@ function AttachedBlock({
 }
 
 // ---------------------------------------------------------
+//  Rich MCQ options (text / LaTeX / image per option)
+// ---------------------------------------------------------
+
+function RichOptionEditor({
+  opt,
+  index,
+  isCorrect,
+  onSelect,
+  onChange,
+  onRemove,
+  canRemove,
+}: {
+  opt: RichOption;
+  index: number;
+  isCorrect: boolean;
+  onSelect: () => void;
+  onChange: (o: RichOption) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+}) {
+  const label = String.fromCharCode(65 + index);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
+  const [latexPreview, setLatexPreview] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (opt.displayType !== "latex" || !opt.content) { setLatexPreview(""); return; }
+    (async () => {
+      try {
+        const katex = (await import("katex")).default;
+        const html = katex.renderToString(opt.content, { throwOnError: false, displayMode: false });
+        setLatexPreview(html);
+      } catch { setLatexPreview(""); }
+    })();
+  }, [opt.content, opt.displayType]);
+
+  async function handleFile(file: File) {
+    setUploadErr("");
+    if (!["image/jpeg", "image/png"].includes(file.type)) { setUploadErr("Only JPG/PNG"); return; }
+    try {
+      setUploading(true);
+      const { default: compress } = await import("browser-image-compression");
+      const compressed = await compress(file, { maxSizeMB: 4.5, maxWidthOrHeight: 1024, useWebWorker: true });
+      const fd = new FormData();
+      fd.append("file", compressed, file.name);
+      const { data } = await api.post("/questions/upload-media", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      onChange({ ...opt, url: data.url, value: `Image option ${label}` });
+    } catch { setUploadErr("Upload failed"); }
+    finally { setUploading(false); }
+  }
+
+  return (
+    <div className={`rounded-xl border p-3 transition ${isCorrect ? "border-emerald-400/40 bg-emerald-500/5" : "border-white/10 bg-white/[0.02]"}`}>
+      <div className="mb-2 flex items-center gap-2">
+        {/* Correct-answer radio */}
+        <button
+          type="button"
+          onClick={onSelect}
+          title="Mark as correct"
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition ${
+            isCorrect ? "border-emerald-400 bg-emerald-400/20" : "border-white/20 hover:border-white/40"
+          }`}
+        >
+          {isCorrect && <span className="h-2 w-2 rounded-full bg-emerald-400" />}
+        </button>
+        <span className="w-5 shrink-0 text-xs font-bold text-white/40">{label}</span>
+
+        {/* Display-type selector */}
+        <div className="flex flex-1 gap-1">
+          {(["text", "latex", "image"] as const).map((dt) => (
+            <button
+              key={dt}
+              type="button"
+              onClick={() => onChange({ ...opt, displayType: dt, content: "", url: "", value: opt.value })}
+              className={`rounded px-2 py-0.5 text-[10px] font-semibold transition ${
+                opt.displayType === dt
+                  ? "bg-indigo-500/25 text-indigo-200"
+                  : "text-white/30 hover:bg-white/10 hover:text-white"
+              }`}
+            >{dt === "text" ? "Text" : dt === "latex" ? "LaTeX" : "Image"}</button>
+          ))}
+        </div>
+
+        {canRemove && (
+          <button type="button" onClick={onRemove}
+            className="rounded p-1 text-white/25 hover:text-rose-300"
+            title="Remove option">
+            <Svg d="M18 6L6 18M6 6l12 12" />
+          </button>
+        )}
+      </div>
+
+      {opt.displayType === "text" && (
+        <input
+          className="auth-input h-10 w-full rounded-lg px-3 text-sm"
+          placeholder={`Option ${label}`}
+          value={opt.value}
+          onChange={(e) => onChange({ ...opt, value: e.target.value, content: e.target.value })}
+        />
+      )}
+
+      {opt.displayType === "latex" && (
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <input
+              className="auth-input h-9 flex-1 rounded-lg px-3 font-mono text-xs"
+              placeholder={`Option ${label} value/label (used for grading)`}
+              value={opt.value}
+              onChange={(e) => onChange({ ...opt, value: e.target.value })}
+            />
+          </div>
+          <textarea
+            className="w-full rounded-lg border border-white/10 bg-slate-950/40 px-2 py-1.5 font-mono text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-400"
+            rows={2}
+            placeholder={`LaTeX for option ${label}, e.g. \\frac{a}{b}`}
+            value={opt.content}
+            onChange={(e) => onChange({ ...opt, content: e.target.value })}
+          />
+          {latexPreview && (
+            <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-white"
+              dangerouslySetInnerHTML={{ __html: latexPreview }} />
+          )}
+        </div>
+      )}
+
+      {opt.displayType === "image" && (
+        <div className="space-y-1.5">
+          <input
+            className="auth-input h-9 w-full rounded-lg px-3 text-xs"
+            placeholder={`Option ${label} label/value (used for grading)`}
+            value={opt.value}
+            onChange={(e) => onChange({ ...opt, value: e.target.value })}
+          />
+          {opt.url ? (
+            <div className="relative inline-block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={opt.url} alt="" className="max-h-36 rounded border border-white/10" />
+              <button
+                type="button"
+                onClick={() => onChange({ ...opt, url: "" })}
+                className="absolute right-1 top-1 h-5 w-5 rounded-full bg-rose-500 text-xs text-white"
+              >×</button>
+            </div>
+          ) : (
+            <div className="cursor-pointer rounded-lg border-2 border-dashed border-white/15 bg-white/[0.02] p-4 text-center hover:border-indigo-400/60"
+              onClick={() => inputRef.current?.click()}>
+              {uploading ? <span className="text-xs text-white/60">Uploading…</span> : (
+                <span className="text-xs text-white/50">Click to upload image for this option</span>
+              )}
+            </div>
+          )}
+          {uploadErr && <p className="text-xs text-rose-300">{uploadErr}</p>}
+          <input ref={inputRef} type="file" accept="image/jpeg,image/png" className="hidden"
+            onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RichMCQOptions({
+  richOptions,
+  correctId,
+  onChangeOptions,
+  onSelectCorrect,
+}: {
+  richOptions: RichOption[];
+  correctId: string;
+  onChangeOptions: (opts: RichOption[]) => void;
+  onSelectCorrect: (valueOrId: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Answer Choices</label>
+      <p className="text-xs text-white/40">Click the radio to mark the correct answer. Each option can be text, LaTeX, or an image.</p>
+      {richOptions.map((opt, i) => (
+        <RichOptionEditor
+          key={opt.id}
+          opt={opt}
+          index={i}
+          isCorrect={correctId === opt.value || correctId === opt.id}
+          onSelect={() => onSelectCorrect(opt.value || opt.id)}
+          onChange={(updated) => {
+            const next = [...richOptions];
+            next[i] = updated;
+            onChangeOptions(next);
+          }}
+          onRemove={() => onChangeOptions(richOptions.filter((_, idx) => idx !== i))}
+          canRemove={richOptions.length > 2}
+        />
+      ))}
+      {richOptions.length < 6 && (
+        <button type="button" onClick={() => onChangeOptions([...richOptions, emptyRichOption()])}
+          className="text-xs text-white/50 hover:text-white">+ Add another option</button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------
 //  MAIN
 // ---------------------------------------------------------
 
@@ -415,7 +800,16 @@ export function QuestionEditor({
   }
 
   function changeType(t: QuestionType) {
-    setForm({ ...form, type: t, correctAnswerStr: "", fillInBlankType: "text", acceptedAnswers: [""], caseSensitive: false });
+    setForm({
+      ...form,
+      type: t,
+      correctAnswerStr: "",
+      fillInBlankType: "text",
+      acceptedAnswers: [""],
+      caseSensitive: false,
+      richOptions: [emptyRichOption(), emptyRichOption(), emptyRichOption(), emptyRichOption()],
+      templateFill: null,
+    });
   }
 
   function insertBlock(type: BlockType) {
@@ -449,6 +843,7 @@ export function QuestionEditor({
   ];
 
   const isMultiBlank = form.type === "MULTI_BLANK_EQUATION";
+  const isTemplateFill = form.type === "TEMPLATE_FILL";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
@@ -470,6 +865,7 @@ export function QuestionEditor({
               <option value="TRUE_FALSE" className="bg-slate-900">True / False</option>
               <option value="FILL_IN_BLANK" className="bg-slate-900">Fill in the Blank</option>
               <option value="MULTI_BLANK_EQUATION" className="bg-slate-900">Multi-Blank Equation</option>
+              <option value="TEMPLATE_FILL" className="bg-slate-900">Template Fill (text / math / matrix / table / diagram)</option>
             </select>
           )}
         </div>
@@ -487,8 +883,8 @@ export function QuestionEditor({
         </div>
       </div>
 
-      {/* Question text — rich or plain */}
-      <div className="space-y-1.5">
+      {/* Question text — rich or plain (hidden for TEMPLATE_FILL which has its own editor) */}
+      {!isTemplateFill && <div className="space-y-1.5">
         <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-white/50">
           <span>Question Text</span>
           {isMultiBlank && (
@@ -513,7 +909,7 @@ export function QuestionEditor({
             placeholder="Enter the question. You can format text using the toolbar above."
           />
         )}
-      </div>
+      </div>}
 
       {/* Insert media toolbar */}
       <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-3">
@@ -557,66 +953,14 @@ export function QuestionEditor({
         </div>
       )}
 
-      {/* MCQ options */}
+      {/* MCQ options — supports text, LaTeX, and image options */}
       {form.type === "MCQ" && (
-        <div className="space-y-2">
-          <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Answer Choices</label>
-          <p className="text-xs text-white/40">Click the radio button next to the correct answer.</p>
-          {form.options.map((opt, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => opt && setForm({ ...form, correctAnswerStr: opt })}
-                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition ${
-                  opt && form.correctAnswerStr === opt
-                    ? "border-emerald-400 bg-emerald-400/20"
-                    : "border-white/20 hover:border-white/40"
-                }`}
-                title={opt ? "Mark as correct" : "Type an option first"}
-              >
-                {opt && form.correctAnswerStr === opt && (
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                )}
-              </button>
-              <span className="w-5 shrink-0 text-xs font-bold text-white/40">{String.fromCharCode(65 + i)}</span>
-              <input
-                className="auth-input h-10 flex-1 rounded-lg px-3 text-sm"
-                placeholder={`Option ${String.fromCharCode(65 + i)}`}
-                value={opt}
-                onChange={(e) => {
-                  const opts = [...form.options];
-                  const old = opts[i];
-                  opts[i] = e.target.value;
-                  const nextCorrect = form.correctAnswerStr === old ? e.target.value : form.correctAnswerStr;
-                  setForm({ ...form, options: opts, correctAnswerStr: nextCorrect });
-                }}
-              />
-              {form.options.length > 2 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const opts = form.options.filter((_, idx) => idx !== i);
-                    const nextCorrect = form.correctAnswerStr === opt ? "" : form.correctAnswerStr;
-                    setForm({ ...form, options: opts, correctAnswerStr: nextCorrect });
-                  }}
-                  className="shrink-0 rounded-md border border-white/10 bg-white/5 p-1.5 text-white/40 hover:bg-rose-500/15 hover:text-rose-300"
-                  title="Remove option"
-                >
-                  <Svg d="M18 6L6 18M6 6l12 12" />
-                </button>
-              )}
-            </div>
-          ))}
-          {form.options.length < 6 && (
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, options: [...form.options, ""] })}
-              className="text-xs text-white/50 hover:text-white"
-            >
-              + Add another option
-            </button>
-          )}
-        </div>
+        <RichMCQOptions
+          richOptions={form.richOptions}
+          correctId={form.correctAnswerStr}
+          onChangeOptions={(richOptions) => setForm({ ...form, richOptions, options: richOptions.map((o) => o.value) })}
+          onSelectCorrect={(id) => setForm({ ...form, correctAnswerStr: id })}
+        />
       )}
 
       {/* True / False */}
@@ -847,6 +1191,14 @@ export function QuestionEditor({
             + Add blank
           </button>
         </div>
+      )}
+
+      {/* Template Fill */}
+      {form.type === "TEMPLATE_FILL" && (
+        <TemplateFillCreator
+          value={form.templateFill}
+          onChange={(v) => setForm({ ...form, templateFill: v })}
+        />
       )}
 
       {error && (

@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Prism.js syntax highlighting (code blocks) */
+@import "prismjs/themes/prism-tomorrow.css";
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -249,4 +252,22 @@
     float: left;
     height: 0;
   }
+
+  /* ── KaTeX responsive math ───────────────────────────── */
+  /* Prevent display equations from forcing horizontal scroll on the page.
+     The equation block scrolls internally if it's genuinely wider than the
+     viewport, but it never breaks the outer layout. */
+  .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.15rem 0;
+    max-width: 100%;
+  }
+  .katex-display > .katex {
+    white-space: normal;
+    text-align: left;
+  }
+  /* Inline math inside question text */
+  .qe-prose .math-inline .katex { font-size: 1em; vertical-align: middle; }
+  .math-inline { display: inline; }
 }

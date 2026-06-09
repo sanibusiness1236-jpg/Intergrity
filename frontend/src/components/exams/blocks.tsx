@@ -80,11 +80,10 @@ export function LatexBlock({
         <p className="text-xs text-rose-300">{err}</p>
       ) : rendered ? (
         <div
-          className="overflow-x-auto rounded-lg border border-dashed border-white/10 bg-white/[0.03] p-3 text-white"
+          className="min-w-0 w-full rounded-lg border border-dashed border-white/10 bg-white/[0.03] p-3 text-white"
           dangerouslySetInnerHTML={{ __html: rendered }}
         />
       ) : null}
-      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
     </div>
   );
 }
@@ -291,12 +290,9 @@ export function CodeBlock({
 
   if (readOnly) {
     return (
-      <>
-        <pre className="overflow-x-auto rounded-lg border border-white/10 bg-slate-900 p-3 text-sm">
-          <code dangerouslySetInnerHTML={{ __html: highlighted || (block.content || "") }} />
-        </pre>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" />
-      </>
+      <pre className="overflow-x-auto rounded-lg border border-white/10 bg-slate-900 p-3 text-sm">
+        <code dangerouslySetInnerHTML={{ __html: highlighted || (block.content || "") }} />
+      </pre>
     );
   }
 
@@ -326,7 +322,6 @@ export function CodeBlock({
           dangerouslySetInnerHTML={{ __html: highlighted || "<span class='text-white/30'>// Enter code here…</span>" }}
         />
       </div>
-      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" />
     </div>
   );
 }

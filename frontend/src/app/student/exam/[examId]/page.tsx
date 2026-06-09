@@ -7,6 +7,8 @@ import { connectSocket, disconnectSocket } from "@/lib/socket";
 import { useAntiCheat } from "@/hooks/useAntiCheat";
 import type { Question } from "@/types";
 import { BlockList } from "@/components/exams/blocks";
+import { TemplateFillRenderer } from "@/components/exams/TemplateFillRenderer";
+import { deserializeTemplateFill } from "@/components/exams/TemplateFillCreator";
 import {
   cacheQuestions,
   getCachedQuestions,
@@ -34,6 +36,22 @@ const Icon = ({ d, size = 16 }: { d: string; size?: number }) => (
     <path d={d} />
   </svg>
 );
+
+/** Renders a LaTeX string inline using KaTeX (client-side, lazy) */
+function RichLatexOption({ latex }: { latex: string }) {
+  const [html, setHtml] = useState("");
+  useEffect(() => {
+    (async () => {
+      try {
+        const katex = (await import("katex")).default;
+        setHtml(katex.renderToString(latex, { throwOnError: false, displayMode: false }));
+      } catch { setHtml(latex); }
+    })();
+  }, [latex]);
+  return html
+    ? <span dangerouslySetInnerHTML={{ __html: html }} />
+    : <span className="font-mono text-sm text-white/60">{latex}</span>;
+}
 
 /* ─── Phase machine ────────────────────────────── */
 type Phase = "loading-exam" | "password" | "ready" | "session-starting" | "taking" | "submitted";
@@ -1295,19 +1313,34 @@ export default function ExamTakingPage() {
                 </div>
               )}
 
-              {/* MCQ */}
+              {/* MCQ — supports plain-text, LaTeX, and image options */}
               {q.type === "MCQ" && Array.isArray(q.options) && (
                 <div className="space-y-2.5">
-                  {(q.options as string[]).map((opt, i) => {
-                    const selected = answers[q.id] === opt;
+                  {(q.options as (string | { displayType?: string; value?: string; content?: string; url?: string })[]).map((raw, i) => {
+                    // Normalise: string or rich option object
+                    const isRich = raw && typeof raw === "object";
+                    const optValue = isRich ? ((raw as {value?: string}).value ?? String(i)) : (raw as string);
+                    const displayType = isRich ? ((raw as {displayType?: string}).displayType ?? "text") : "text";
+                    const content = isRich ? ((raw as {content?: string}).content ?? optValue) : (raw as string);
+                    const imgUrl = isRich ? ((raw as {url?: string}).url ?? "") : "";
+                    const selected = answers[q.id] === optValue;
                     return (
-                      <label key={i} className={`group flex cursor-pointer items-center gap-3 rounded-xl border p-4 transition-all ${selected ? "border-indigo-400/50 bg-indigo-500/15 shadow-lg shadow-indigo-500/10" : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/5"}`}>
-                        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition ${selected ? "border-indigo-400 bg-indigo-500" : "border-white/20 group-hover:border-white/40"}`}>
+                      <label key={i} className={`group flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-all ${selected ? "border-indigo-400/50 bg-indigo-500/15 shadow-lg shadow-indigo-500/10" : "border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/5"}`}>
+                        <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition ${selected ? "border-indigo-400 bg-indigo-500" : "border-white/20 group-hover:border-white/40"}`}>
                           {selected && <span className="h-2 w-2 rounded-full bg-white" />}
                         </span>
-                        <span className="font-mono text-xs font-bold text-white/40">{String.fromCharCode(65 + i)}.</span>
-                        <span className={`flex-1 text-sm ${selected ? "text-white" : "text-white/80"}`}>{opt}</span>
-                        <input type="radio" name={q.id} checked={selected} onChange={() => setAnswer(q.id, opt)} className="sr-only" />
+                        <span className="font-mono text-xs font-bold text-white/40 mt-0.5">{String.fromCharCode(65 + i)}.</span>
+                        <span className={`flex-1 ${selected ? "text-white" : "text-white/80"}`}>
+                          {displayType === "image" && imgUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={imgUrl} alt={optValue} loading="lazy" className="max-h-48 rounded-lg border border-white/10" />
+                          ) : displayType === "latex" && content ? (
+                            <RichLatexOption latex={content} />
+                          ) : (
+                            <span className="text-sm">{optValue}</span>
+                          )}
+                        </span>
+                        <input type="radio" name={q.id} checked={selected} onChange={() => setAnswer(q.id, optValue)} className="sr-only" />
                       </label>
                     );
                   })}
@@ -1366,6 +1399,22 @@ export default function ExamTakingPage() {
               })()}
             </div>
           )}
+
+          {/* Template Fill */}
+          {q.type === "TEMPLATE_FILL" && (() => {
+            const tfv = deserializeTemplateFill(q.text, q.correctAnswer);
+            if (!tfv) return <p className="text-sm text-white/40">Template configuration missing.</p>;
+            const cur = (answers[q.id] && typeof answers[q.id] === "object" && !Array.isArray(answers[q.id]))
+              ? (answers[q.id] as Record<string, string>)
+              : {};
+            return (
+              <TemplateFillRenderer
+                config={tfv.config}
+                value={cur}
+                onChange={(next) => setAnswer(q.id, next)}
+              />
+            );
+          })()}
 
           {/* Navigation */}
           <div className="flex items-center justify-between gap-3 pb-2">
