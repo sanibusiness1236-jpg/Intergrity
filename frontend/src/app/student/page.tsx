@@ -151,7 +151,7 @@ export default function StudentDashboard() {
           className="pointer-events-none absolute -bottom-24 -right-20 h-72 w-72 rounded-full bg-purple-500/20 blur-3xl"
         />
 
-        <div className="relative z-10 px-6 py-10 md:px-12 md:py-14 space-y-5">
+        <div className="relative z-10 px-4 py-8 sm:px-6 sm:py-10 md:px-12 md:py-14 space-y-5">
           <AnnouncementBadge
             tag={inProgress > 0 ? "Live" : newlyAvailable.length > 0 ? "New" : "Tip"}
             message={
@@ -224,7 +224,7 @@ export default function StudentDashboard() {
                         .then(({ data }) => cacheQuestions(exam.id, data.data.questions || []))
                         .catch(() => {});
                     }}
-                    className="flex items-center gap-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/30 hover:bg-emerald-500/10">
+                    className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 transition hover:border-emerald-500/30 hover:bg-emerald-500/10 sm:flex-nowrap">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10">
                       <Icon d="M9 12l2 2 4-4M12 2a10 10 0 100 20 10 10 0 000-20z" size={16} />
                     </div>

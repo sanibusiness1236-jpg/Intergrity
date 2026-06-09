@@ -38,7 +38,7 @@ export function AuthShell({
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-4">
+    <main className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-slate-950 p-3 py-6 sm:p-6 sm:py-10">
       {videoOk && (
         <video
           autoPlay
@@ -46,22 +46,22 @@ export function AuthShell({
           loop
           playsInline
           onError={() => setVideoOk(false)}
-          className="pointer-events-none absolute inset-0 z-0 h-full w-full object-cover opacity-30 blur-2xl"
+          className="pointer-events-none fixed inset-0 z-0 h-full w-full object-cover opacity-30 blur-2xl"
           style={{ filter: "blur(28px) saturate(140%)" }}
         >
           <source src={BG_VIDEO_SRC} type="video/mp4" />
         </video>
       )}
 
-      <div className="pointer-events-none absolute inset-0 z-[1]">
+      <div className="pointer-events-none fixed inset-0 z-[1]">
         <div className="auth-blob absolute -top-32 -left-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-indigo-500/40 via-purple-500/30 to-pink-500/20 blur-3xl" />
         <div className="auth-blob-delayed absolute -bottom-32 -right-32 h-[480px] w-[480px] rounded-full bg-gradient-to-br from-cyan-500/30 via-blue-500/30 to-indigo-500/30 blur-3xl" />
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-slate-950/20 to-slate-950/60" />
       </div>
 
-      <div className="relative z-10 flex w-full max-w-5xl overflow-hidden rounded-3xl auth-card">
+      <div className="relative z-10 flex w-full max-w-5xl overflow-hidden rounded-2xl auth-card sm:rounded-3xl my-auto">
         <section
-          className="relative flex w-full flex-col justify-center px-6 py-10 md:px-12 lg:w-1/2"
+          className="relative flex w-full flex-col justify-center px-5 py-8 sm:px-8 sm:py-10 md:px-12 lg:w-1/2"
           onMouseMove={handleMouseMove}
           onMouseEnter={() => setHovering(true)}
           onMouseLeave={() => setHovering(false)}

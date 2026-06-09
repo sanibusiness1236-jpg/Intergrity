@@ -41,6 +41,7 @@ export function PortalLayout({ children, portalName, navItems, allowedRoles }: P
   const { user, isAuthenticated, logout, fetchProfile } = useAuthStore();
   const [brand, setBrand] = useState<InstitutionBrand | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
@@ -72,16 +73,13 @@ export function PortalLayout({ children, portalName, navItems, allowedRoles }: P
   const initials = `${user?.firstName?.[0] || ""}${user?.lastName?.[0] || ""}`.toUpperCase();
   const avatarUrl = (user as any)?.avatarUrl;
 
-  return (
-    <div className="flex min-h-screen dashboard-bg text-white">
-      <aside
-        className={cn(
-          "sticky top-0 flex h-screen shrink-0 flex-col border-r border-white/5 bg-slate-950/80 backdrop-blur-xl transition-all duration-300",
-          collapsed ? "w-20" : "w-64",
-        )}
-      >
-        <div className="border-b border-white/5 p-4">
-          <Link href={navItems[0]?.href || "/"} className="flex items-center gap-3">
+  // Shared sidebar content — used in both desktop (sticky) and mobile (overlay)
+  const SidebarContent = ({ closable = false }: { closable?: boolean }) => (
+    <>
+      {/* Header */}
+      <div className="border-b border-white/5 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <Link href={navItems[0]?.href || "/"} className="flex min-w-0 items-center gap-3" onClick={() => setMobileOpen(false)}>
             {logoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoSrc} alt="Logo" className="h-9 w-9 shrink-0 rounded-lg object-contain ring-1 ring-white/10" />
@@ -97,81 +95,177 @@ export function PortalLayout({ children, portalName, navItems, allowedRoles }: P
               </div>
             )}
           </Link>
+          {/* Close button shown only inside the mobile drawer */}
+          {closable && (
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white/50 hover:bg-white/10 hover:text-white"
+              aria-label="Close menu"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
+      </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto p-3 scrollbar-thin">
-          {navItems.map((item) => {
-            const active = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  "group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
-                  active
-                    ? "bg-white/10 text-white shadow-inner shadow-white/5"
-                    : "text-white/55 hover:bg-white/5 hover:text-white",
-                  collapsed && "justify-center",
-                )}
-              >
-                {active && (
-                  <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-400 to-purple-500" />
-                )}
-                <span className="shrink-0">{item.icon}</span>
-                {!collapsed && <span className="truncate">{item.label}</span>}
-              </Link>
-            );
-          })}
-        </nav>
+      {/* Nav */}
+      <nav className="flex-1 space-y-1 overflow-y-auto p-3 scrollbar-thin">
+        {navItems.map((item) => {
+          const active = pathname === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              title={collapsed ? item.label : undefined}
+              onClick={() => setMobileOpen(false)}
+              className={cn(
+                "group relative flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-all",
+                active
+                  ? "bg-white/10 text-white shadow-inner shadow-white/5"
+                  : "text-white/55 hover:bg-white/5 hover:text-white",
+                collapsed && "justify-center",
+              )}
+            >
+              {active && (
+                <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-400 to-purple-500" />
+              )}
+              <span className="shrink-0">{item.icon}</span>
+              {!collapsed && <span className="truncate">{item.label}</span>}
+            </Link>
+          );
+        })}
+      </nav>
 
-        <div className="border-t border-white/5 p-3">
-          {/* Clickable user block */}
+      {/* Footer */}
+      <div className="border-t border-white/5 p-3">
+        <button
+          onClick={() => setShowProfile(true)}
+          title="Edit profile"
+          className={cn(
+            "mb-3 flex w-full items-center gap-3 rounded-lg p-2 transition hover:bg-white/5",
+            collapsed && "justify-center"
+          )}
+        >
+          {avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={avatarUrl} alt="Avatar" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-indigo-400/40" />
+          ) : (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-xs font-bold text-white">
+              {initials || "?"}
+            </div>
+          )}
+          {!collapsed && (
+            <div className="min-w-0 flex-1 text-left">
+              <p className="truncate text-sm font-medium text-white">{user?.firstName} {user?.lastName}</p>
+              <p className="truncate text-xs text-white/40">{user?.email}</p>
+            </div>
+          )}
+        </button>
+        <div className="flex gap-2">
+          {/* Collapse toggle — desktop only */}
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            className="hidden md:flex h-8 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
+            title={collapsed ? "Expand" : "Collapse"}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" className={collapsed ? "rotate-180" : ""}>
+              <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={() => { logout(); router.push("/login"); }}
+            className="flex h-8 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/60 transition hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-300"
+            title="Sign out"
+          >
+            <Svg d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex min-h-screen dashboard-bg text-white">
+
+      {/* ── Mobile overlay backdrop ─────────────────────────────── */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden
+        />
+      )}
+
+      {/* ── Mobile drawer (fixed, slide in from left) ──────────── */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-white/5 bg-slate-950/95 backdrop-blur-xl transition-transform duration-300 ease-in-out md:hidden",
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <SidebarContent closable />
+      </aside>
+
+      {/* ── Desktop sidebar (sticky, always visible on md+) ───── */}
+      <aside
+        className={cn(
+          "sticky top-0 hidden h-screen shrink-0 flex-col border-r border-white/5 bg-slate-950/80 backdrop-blur-xl transition-all duration-300 md:flex",
+          collapsed ? "w-20" : "w-64",
+        )}
+      >
+        <SidebarContent />
+      </aside>
+
+      {/* ── Right-side content column ────────────────────────── */}
+      <div className="flex min-w-0 flex-1 flex-col">
+
+        {/* Mobile top bar */}
+        <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/5 bg-slate-950/80 px-4 py-3 backdrop-blur-xl md:hidden">
+          <button
+            onClick={() => setMobileOpen(true)}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+            aria-label="Open menu"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12h18M3 6h18M3 18h18" />
+            </svg>
+          </button>
+
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {logoSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoSrc} alt="Logo" className="h-8 w-8 shrink-0 rounded-lg object-contain ring-1 ring-white/10" />
+            ) : (
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
+                <Svg d="M12 2L4 6v6c0 5 3.5 9.5 8 10 4.5-.5 8-5 8-10V6l-8-4z" size={16} />
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-xs font-bold text-white leading-none">{brand?.shortName || "INTEGRITY"}</p>
+              <p className="truncate text-[9px] uppercase tracking-wider text-white/40">{portalName}</p>
+            </div>
+          </div>
+
           <button
             onClick={() => setShowProfile(true)}
-            title="Edit profile"
-            className={cn(
-              "mb-3 flex w-full items-center gap-3 rounded-lg p-2 transition hover:bg-white/5",
-              collapsed && "justify-center"
-            )}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition hover:ring-2 hover:ring-indigo-400/40"
+            aria-label="Profile"
           >
             {avatarUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={avatarUrl} alt="Avatar" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-indigo-400/40" />
+              <img src={avatarUrl} alt="Avatar" className="h-9 w-9 rounded-full object-cover ring-2 ring-indigo-400/40" />
             ) : (
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-xs font-bold text-white">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-xs font-bold text-white">
                 {initials || "?"}
               </div>
             )}
-            {!collapsed && (
-              <div className="min-w-0 flex-1 text-left">
-                <p className="truncate text-sm font-medium text-white">{user?.firstName} {user?.lastName}</p>
-                <p className="truncate text-xs text-white/40">{user?.email}</p>
-              </div>
-            )}
           </button>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setCollapsed((v) => !v)}
-              className="flex h-8 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/60 transition hover:bg-white/10 hover:text-white"
-              title={collapsed ? "Expand" : "Collapse"}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" className={collapsed ? "rotate-180" : ""}>
-                <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              onClick={() => { logout(); router.push("/login"); }}
-              className="flex h-8 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/60 transition hover:border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-300"
-              title="Sign out"
-            >
-              <Svg d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
-            </button>
-          </div>
-        </div>
-      </aside>
+        </header>
 
-      <main className="flex-1 overflow-x-hidden p-6 md:p-10">{children}</main>
+        <main className="flex-1 overflow-x-hidden p-4 sm:p-6 md:p-8 lg:p-10">{children}</main>
+      </div>
 
       {/* Profile modal */}
       {showProfile && (
@@ -308,7 +402,7 @@ function ProfileModal({
 
         {/* Form */}
         <form onSubmit={handleSave} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-white/50">First Name</label>
               <input

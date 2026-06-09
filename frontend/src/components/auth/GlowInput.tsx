@@ -19,7 +19,7 @@ export function GlowInput({ label, icon, containerClassName, className, ...rest 
   }
 
   return (
-    <div className={`w-full min-w-[200px] ${containerClassName ?? ""}`}>
+    <div className={`w-full min-w-0 ${containerClassName ?? ""}`}>
       {label && (
         <label className="mb-1.5 block text-xs font-medium text-white/70">{label}</label>
       )}

@@ -133,7 +133,7 @@ function RegisterForm() {
         "Auto-save & seamless session recovery",
       ]}
     >
-      <form onSubmit={handleSubmit} className="grid max-h-[80vh] gap-4 overflow-y-auto pr-1">
+      <form onSubmit={handleSubmit} className="grid gap-4">
         <div className="space-y-1 text-center">
           <h1 className="text-3xl font-extrabold tracking-tight text-white md:text-4xl">Create account</h1>
           <p className="text-sm text-white/60">You&apos;re registering as a{" "}
@@ -157,7 +157,7 @@ function RegisterForm() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <GlowInput
             placeholder="First name"
             value={form.firstName}
@@ -192,7 +192,7 @@ function RegisterForm() {
         {isStudent && (
           <div className="grid gap-3 rounded-lg border border-white/10 bg-white/5 p-3">
             <p className="text-xs font-medium uppercase tracking-wider text-white/50">Student details</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <GlowInput
                 placeholder="Student ID"
                 value={form.studentId}
@@ -223,7 +223,7 @@ function RegisterForm() {
         <button
           type="submit"
           disabled={isLoading}
-          className="auth-shimmer-btn group relative mt-2 inline-flex h-12 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 px-6 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all duration-300 hover:shadow-xl hover:shadow-purple-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+          className="auth-shimmer-btn group relative mt-2 flex h-12 w-full items-center justify-center overflow-hidden rounded-lg bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 px-6 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all duration-300 hover:shadow-xl hover:shadow-purple-500/40 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <span className="relative z-10">{isLoading ? "Creating account…" : "Create Account"}</span>
         </button>
