@@ -336,10 +336,10 @@ export default function AnalyticsPage() {
       )}
 
       {stats && (
-        <div className="flex gap-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
           {/* ── Left sidebar nav ── */}
-          <aside className="w-56 shrink-0">
-            <div className="sticky top-6 space-y-1 rounded-xl border border-white/5 bg-slate-950/60 p-2 backdrop-blur-xl">
+          <aside className="w-full lg:w-56 lg:shrink-0">
+            <div className="lg:sticky lg:top-6 space-y-1 rounded-xl border border-white/5 bg-slate-950/60 p-2 backdrop-blur-xl">
               {NAV_TREE.map((sec) => {
                 const isExpanded = expandedSections.has(sec.id);
                 const isActive = activeItem.startsWith(sec.id + ".");

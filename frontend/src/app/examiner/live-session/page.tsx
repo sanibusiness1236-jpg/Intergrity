@@ -434,10 +434,10 @@ export default function LiveSessionPage() {
 
   return (
     <DashboardShell>
-      <div className="flex gap-5 min-h-[80vh]">
+      <div className="flex flex-col gap-4 lg:flex-row lg:gap-5 min-h-[80vh]">
         {/* ── Left sidebar ───────────────────────────────── */}
-        <aside className="w-72 shrink-0">
-          <div className="sticky top-6 rounded-xl border border-white/5 bg-slate-950/70 p-5 backdrop-blur-xl space-y-5">
+        <aside className="w-full lg:w-72 lg:shrink-0">
+          <div className="lg:sticky lg:top-6 rounded-xl border border-white/5 bg-slate-950/70 p-5 backdrop-blur-xl space-y-5">
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <span className={`h-2 w-2 rounded-full ${monitoringCount > 0 && !error ? "bg-emerald-400 animate-pulse" : "bg-white/20"}`} />
@@ -550,7 +550,7 @@ export default function LiveSessionPage() {
         </aside>
 
         {/* ── Main content ────────────────────────────────── */}
-        <div className="min-w-0 flex-1 space-y-4">
+        <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-white">Live Session Monitor</h1>

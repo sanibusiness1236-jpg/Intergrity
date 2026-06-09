@@ -333,9 +333,9 @@ export default function IntegrityMonitoringPage() {
         <GradientHeading highlight="Integrity" title="Monitoring." subtitle="Run GNN predictions on exam sessions, analyze behavioral patterns, visualize academic dishonesty networks, and generate integrity reports." />
       </header>
 
-      <div className="flex gap-5">
-        <aside className="w-56 shrink-0">
-          <div className="sticky top-6 space-y-0.5 rounded-xl border border-white/5 bg-slate-950/60 p-2 backdrop-blur-xl">
+      <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
+        <aside className="w-full lg:w-56 lg:shrink-0">
+          <div className="lg:sticky lg:top-6 space-y-0.5 rounded-xl border border-white/5 bg-slate-950/60 p-2 backdrop-blur-xl">
             {NAV_TREE.map((sec) => {
               const isExp = expanded.has(sec.id);
               const hasItems = sec.items.length > 0;

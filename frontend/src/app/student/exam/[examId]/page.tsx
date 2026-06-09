@@ -55,7 +55,10 @@ export default function ExamTakingPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
   const [showTimer, setShowTimer] = useState(true);
-  const [showMap, setShowMap] = useState(true);
+  // Default map hidden on mobile so the question content fills the screen on first load
+  const [showMap, setShowMap] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 768 : true
+  );
   const [password, setPassword] = useState("");
   const [pwError, setPwError] = useState("");
   const [startError, setStartError] = useState("");
@@ -1233,10 +1236,12 @@ export default function ExamTakingPage() {
       </header>
 
       {/* ── Body ─────────────────────────────────── */}
-      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+      {/* On mobile: single column (question full-width, map below).
+          On desktop: side-by-side (question | map). */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 gap-3 sm:p-4 sm:gap-4 md:flex-row md:overflow-hidden">
 
-        {/* Question panel (left/main) */}
-        <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
+        {/* Question panel — full width on mobile, flex-1 on desktop */}
+        <main className="flex min-w-0 flex-col gap-4 md:flex-1 md:overflow-y-auto">
           {/* Question counter */}
           <div className="flex items-center justify-between text-xs text-white/50">
             <span>Question <span className="font-bold text-white">{currentIndex + 1}</span> of {questions.length}</span>
@@ -1387,23 +1392,24 @@ export default function ExamTakingPage() {
           </div>
         </main>
 
-        {/* ── Right sidebar: Question Map ───────────── */}
+        {/* ── Question Map — full-width row on mobile, sidebar on desktop ── */}
         {showMap && (
-          <aside className="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto">
+          <aside className="flex shrink-0 flex-col gap-3 md:w-64 md:overflow-y-auto">
             {/* Question map */}
             <div className="rounded-xl border border-purple-400/10 bg-slate-950/55 p-3 backdrop-blur-md">
               <div className="mb-2.5 flex items-center justify-between">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Question Map</span>
                 <span className="text-[10px] text-white/25">{answered}/{questions.length}</span>
               </div>
-              <div className="flex flex-wrap gap-1.5">
+              {/* On mobile: small buttons in a tighter grid; on desktop: standard size */}
+              <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(2rem, 1fr))" }}>
                 {questions.map((qq, i) => {
                   const isCur = i === currentIndex;
                   const hasAns = answers[qq.id] !== undefined && answers[qq.id] !== "";
                   const canJump = allowBacktrack || i >= currentIndex;
                   return (
                     <button key={i} onClick={() => canJump && setCurrentIndex(i)} disabled={!canJump}
-                      className={`h-8 w-8 rounded-md text-xs font-bold transition ${
+                      className={`h-8 w-full rounded-md text-xs font-bold transition ${
                         isCur ? "bg-gradient-to-br from-indigo-500 to-purple-500 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-400/50"
                           : hasAns ? "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25"
                             : "bg-white/5 text-white/55 hover:bg-white/10"

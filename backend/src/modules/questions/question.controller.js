@@ -266,7 +266,13 @@ async function deleteQuestion(req, res, next) {
 
     await ensureExamOwnership(question.examId, req.user);
 
-    await prisma.question.delete({ where: { id: req.params.id } });
+    // Delete dependent rows first to avoid FK constraint violations.
+    // Order matters: answers → question reports → question
+    await prisma.$transaction([
+      prisma.answer.deleteMany({ where: { questionId: req.params.id } }),
+      prisma.questionReport.deleteMany({ where: { questionId: req.params.id } }),
+      prisma.question.delete({ where: { id: req.params.id } }),
+    ]);
 
     await prisma.exam.update({
       where: { id: question.examId },
