@@ -954,12 +954,21 @@ function QuestionCard({
   const fibType = (question as any).fillInBlankType;
 
   const correctAnswerDisplay = useMemo(() => {
-    if (question.type === "MCQ") return String(question.correctAnswer);
-    if (question.type === "TRUE_FALSE") return String(question.correctAnswer);
-    if (question.type === "FILL_IN_BLANK") return String(question.correctAnswer);
+    if (question.type === "MCQ") return String(question.correctAnswer ?? "");
+    if (question.type === "TRUE_FALSE") return String(question.correctAnswer ?? "");
+    if (question.type === "FILL_IN_BLANK") {
+      const ca = question.correctAnswer;
+      if (ca && typeof ca === "object" && !Array.isArray(ca)) {
+        // new format: { answers: string[], caseSensitive: boolean }
+        const answers = (ca as { answers?: string[] }).answers;
+        return Array.isArray(answers) ? answers.join(" / ") : String(ca);
+      }
+      return String(ca ?? "");
+    }
     if (question.type === "MULTI_BLANK_EQUATION" && Array.isArray(question.correctAnswer)) {
       return (question.correctAnswer as string[]).join(" · ");
     }
+    if (question.type === "TEMPLATE_FILL") return "Template fill";
     return "";
   }, [question]);
 
@@ -984,12 +993,23 @@ function QuestionCard({
               </span>
             )}
           </div>
-          {question.text && question.text !== "[block-based question]" && (
+          {question.text && question.text !== "[block-based question]" && question.type !== "TEMPLATE_FILL" && (
             <div
               className="qe-prose text-sm text-white"
               dangerouslySetInnerHTML={{ __html: question.text }}
             />
           )}
+          {question.type === "TEMPLATE_FILL" && (() => {
+            try {
+              const cfg = JSON.parse(question.text || "{}");
+              return (
+                <p className="text-xs text-fuchsia-300/80">
+                  Template ({cfg.templateType ?? "?"}) · {(cfg.blankOrder ?? []).length} blank(s)
+                  {cfg.stem ? ` — ${cfg.stem}` : ""}
+                </p>
+              );
+            } catch { return null; }
+          })()}
 
           {Array.isArray(question.blocks) && question.blocks.length > 0 && (
             <div className="space-y-2 rounded-lg border border-white/5 bg-white/[0.02] p-3">
@@ -1003,15 +1023,26 @@ function QuestionCard({
 
           {question.type === "MCQ" && Array.isArray(question.options) && (
             <div className="space-y-1">
-              {(question.options as string[]).map((opt, idx) => {
-                const isCorrect = opt === question.correctAnswer;
+              {(question.options as (string | { displayType?: string; value?: string; content?: string; url?: string })[]).map((raw, idx) => {
+                const isRich = raw !== null && typeof raw === "object";
+                const optValue   = isRich ? ((raw as { value?: string }).value ?? "") : (raw as string);
+                const dtype      = isRich ? ((raw as { displayType?: string }).displayType ?? "text") : "text";
+                const latex      = isRich ? ((raw as { content?: string }).content ?? "") : "";
+                const imgUrl     = isRich ? ((raw as { url?: string }).url ?? "")     : "";
+                const isCorrect  = optValue === String(question.correctAnswer);
                 return (
-                  <div key={idx} className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+                  <div key={idx} className={`flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
                     isCorrect ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/5 bg-white/[0.02] text-white/60"
                   }`}>
-                    <span className="font-mono text-[10px] opacity-60">{String.fromCharCode(65 + idx)}.</span>
-                    <span className="flex-1">{opt}</span>
-                    {isCorrect && <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Correct</span>}
+                    <span className="font-mono text-[10px] opacity-60 mt-0.5">{String.fromCharCode(65 + idx)}.</span>
+                    <span className="flex-1 min-w-0">
+                      {dtype === "image" && imgUrl
+                        ? <img src={imgUrl} alt={optValue} loading="lazy" className="max-h-24 rounded" />
+                        : dtype === "latex" && latex
+                          ? <code className="rounded bg-white/10 px-1 font-mono">{latex}</code>
+                          : optValue}
+                    </span>
+                    {isCorrect && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Correct</span>}
                   </div>
                 );
               })}
@@ -2297,7 +2328,7 @@ function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) 
                     <span className="font-bold text-white">Question {i + 1}</span>
                     <span className="text-white/40">{q.marks} pt{q.marks !== 1 ? "s" : ""}</span>
                   </div>
-                  {q.text && q.text !== "[block-based question]" && (
+                  {q.text && q.text !== "[block-based question]" && q.type !== "TEMPLATE_FILL" && (
                     q.type === "MULTI_BLANK_EQUATION" ? (
                       <p className="mb-3 text-sm text-white">{q.text}</p>
                     ) : (
@@ -2316,12 +2347,25 @@ function PreviewTab({ exam, questions }: { exam: Exam; questions: Question[] }) 
 
                   {q.type === "MCQ" && Array.isArray(q.options) && (
                     <div className="space-y-2">
-                      {(q.options as string[]).map((opt, idx) => (
-                        <label key={idx} className="flex cursor-not-allowed items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
-                          <input type="radio" disabled className="accent-indigo-500" />
-                          <span>{opt}</span>
-                        </label>
-                      ))}
+                      {(q.options as (string | { displayType?: string; value?: string; content?: string; url?: string })[]).map((raw, idx) => {
+                        const isRich   = raw !== null && typeof raw === "object";
+                        const optValue = isRich ? ((raw as { value?: string }).value ?? "") : (raw as string);
+                        const dtype    = isRich ? ((raw as { displayType?: string }).displayType ?? "text") : "text";
+                        const latex    = isRich ? ((raw as { content?: string }).content ?? "") : "";
+                        const imgUrl   = isRich ? ((raw as { url?: string }).url ?? "") : "";
+                        return (
+                          <label key={idx} className="flex cursor-not-allowed items-start gap-2 rounded-md border border-white/5 bg-white/[0.02] p-2.5 text-sm text-white/70">
+                            <input type="radio" disabled className="mt-0.5 accent-indigo-500" />
+                            <span className="min-w-0 flex-1">
+                              {dtype === "image" && imgUrl
+                                ? <img src={imgUrl} alt={optValue} loading="lazy" className="max-h-24 rounded" />
+                                : dtype === "latex" && latex
+                                  ? <code className="rounded bg-white/10 px-1 font-mono text-xs">{latex}</code>
+                                  : optValue}
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
                   )}
                   {q.type === "TRUE_FALSE" && (
