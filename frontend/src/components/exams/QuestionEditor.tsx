@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
+import { MathInline } from "./MathInlineExtension";
 import type { Question, QuestionType } from "@/types";
 import {
   AudioBlock,
@@ -63,6 +64,7 @@ export function emptyRichOption(): RichOption {
 
 function richOptToStorage(o: RichOption): unknown {
   if (o.displayType === "text") return o.value;
+  // For LaTeX/image options store as object; value MUST be non-empty for grading
   return { displayType: o.displayType, value: o.value, content: o.content, url: o.url };
 }
 
@@ -70,15 +72,13 @@ function storageToRichOpt(raw: unknown): RichOption {
   if (typeof raw === "string") {
     return { id: uid(), displayType: "text", value: raw, content: raw, url: "" };
   }
-  if (raw && typeof raw === "object") {
-    const r = raw as Partial<RichOption>;
-    return {
-      id: uid(),
-      displayType: r.displayType ?? "text",
-      value: r.value ?? "",
-      content: r.content ?? r.value ?? "",
-      url: r.url ?? "",
-    };
+  if (raw !== null && typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    const value  = typeof r.value   === "string" ? r.value   : "";
+    const content = typeof r.content === "string" ? r.content : value;
+    const url    = typeof r.url     === "string" ? r.url     : "";
+    const dtype  = r.displayType === "latex" || r.displayType === "image" ? r.displayType : "text";
+    return { id: uid(), displayType: dtype, value, content, url };
   }
   return emptyRichOption();
 }
@@ -190,11 +190,14 @@ export function formToPayload(form: QuestionFormValue): {
   error: string | null;
 } {
   const isMultiBlank = form.type === "MULTI_BLANK_EQUATION";
+  const isTemplateFillType = form.type === "TEMPLATE_FILL";
   const blocks = form.blocks.length > 0 ? form.blocks : undefined;
 
-  // Text is only required when there are no blocks to carry the question content
-  const textEmpty = isMultiBlank ? !form.text.trim() : isHtmlEmpty(form.text);
-  if (textEmpty && !blocks) return { payload: null, error: "Question text is required (or add at least one content block)" };
+  // For TEMPLATE_FILL the template itself IS the content — skip text requirement
+  if (!isTemplateFillType) {
+    const textEmpty = isMultiBlank ? !form.text.trim() : isHtmlEmpty(form.text);
+    if (textEmpty && !blocks) return { payload: null, error: "Question text is required (or add at least one content block)" };
+  }
   if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
 
   if (form.type === "MCQ") {
@@ -205,7 +208,7 @@ export function formToPayload(form: QuestionFormValue): {
       return false;
     });
     if (richOpts.length < 2) return { payload: null, error: "MCQ needs at least 2 options" };
-    const correctOpt = richOpts.find((o) => o.value === form.correctAnswerStr || o.id === form.correctAnswerStr);
+    const correctOpt = richOpts.find((o) => o.value === form.correctAnswerStr);
     if (!correctOpt) return { payload: null, error: "Select which option is correct" };
     const serialisedOpts = richOpts.map(richOptToStorage);
     return {
@@ -213,7 +216,7 @@ export function formToPayload(form: QuestionFormValue): {
         type: "MCQ",
         text: form.text,
         options: serialisedOpts,
-        correctAnswer: correctOpt.value || correctOpt.id,
+        correctAnswer: correctOpt.value,   // always a stable plain-text value
         marks: form.marks,
         blocks,
       } as Partial<Question>,
@@ -325,18 +328,17 @@ const Svg = ({ d, size = 14 }: { d: string; size?: number }) => (
 //  Inline-math popover for TipTap
 // ---------------------------------------------------------
 
-function MathPopover({ onInsert, onClose }: { onInsert: (html: string) => void; onClose: () => void }) {
+function MathPopover({ onInsert, onClose }: { onInsert: (latex: string) => void; onClose: () => void }) {
   const [latex, setLatex] = useState("");
   const [preview, setPreview] = useState("");
-  const [err, setErr]   = useState("");
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     (async () => {
       if (!latex.trim()) { setPreview(""); setErr(""); return; }
       try {
         const katex = (await import("katex")).default;
-        const html = katex.renderToString(latex, { throwOnError: false, displayMode: false });
-        setPreview(html);
+        setPreview(katex.renderToString(latex, { throwOnError: false, displayMode: false }));
         setErr("");
       } catch (e) {
         setErr(String(e));
@@ -345,10 +347,8 @@ function MathPopover({ onInsert, onClose }: { onInsert: (html: string) => void; 
   }, [latex]);
 
   function insert() {
-    if (!preview) return;
-    // Wrap in a non-editable span; data-latex preserves the source
-    const span = `<span class="math-inline" contenteditable="false" data-latex="${latex.replace(/"/g, "&quot;")}"><span aria-hidden="true">${preview}</span></span>`;
-    onInsert(span);
+    if (!latex.trim()) return;
+    onInsert(latex);
     onClose();
   }
 
@@ -363,13 +363,13 @@ function MathPopover({ onInsert, onClose }: { onInsert: (html: string) => void; 
         value={latex}
         onChange={(e) => setLatex(e.target.value)}
       />
-      {err  && <p className="text-xs text-rose-300">{err}</p>}
+      {err && <p className="text-xs text-rose-300">{err}</p>}
       {preview && !err && (
         <div className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-white"
           dangerouslySetInnerHTML={{ __html: preview }} />
       )}
       <div className="flex gap-2">
-        <button type="button" onClick={insert} disabled={!preview}
+        <button type="button" onClick={insert} disabled={!latex.trim()}
           className="flex-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
           Insert
         </button>
@@ -396,7 +396,7 @@ function RichQuestionText({
   placeholder: string;
 }) {
   const editor = useEditor({
-    extensions: [StarterKit, Underline],
+    extensions: [StarterKit, Underline, MathInline],
     content: value || "",
     immediatelyRender: false,
     onUpdate({ editor }) {
@@ -413,6 +413,16 @@ function RichQuestionText({
 
   const [showMath, setShowMath] = useState(false);
   const mathBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Insert an inline math node into TipTap using the MathInline custom node
+  function insertMath(latex: string) {
+    if (!editor || !latex.trim()) return;
+    editor.chain().focus().insertContent({
+      type: "mathInline",
+      attrs: { latex },
+    }).run();
+    onChange(editor.getHTML());
+  }
 
   // Sync external value changes (e.g. when switching between editing different questions)
   useEffect(() => {
@@ -477,9 +487,9 @@ function RichQuestionText({
           </button>
           {showMath && (
             <MathPopover
-              onInsert={(html) => {
-                editor.chain().focus().insertContent(html).run();
-                onChange(editor.getHTML());
+              onInsert={(latex) => {
+                insertMath(latex);
+                setShowMath(false);
               }}
               onClose={() => setShowMath(false)}
             />
@@ -741,8 +751,8 @@ function RichMCQOptions({
           key={opt.id}
           opt={opt}
           index={i}
-          isCorrect={correctId === opt.value || correctId === opt.id}
-          onSelect={() => onSelectCorrect(opt.value || opt.id)}
+          isCorrect={!!(correctId && correctId === opt.value)}
+          onSelect={() => onSelectCorrect(opt.value)}
           onChange={(updated) => {
             const next = [...richOptions];
             next[i] = updated;

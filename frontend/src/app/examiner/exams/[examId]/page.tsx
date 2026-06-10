@@ -799,6 +799,7 @@ function QuestionsTab({ examId, examStatus, questions, onQuestionsChange, onChan
     { type: "TRUE_FALSE", description: "Single binary True / False answer" },
     { type: "FILL_IN_BLANK", description: "Type-in box or dropdown select" },
     { type: "MULTI_BLANK_EQUATION", description: "Multiple blanks with partial credit" },
+    { type: "TEMPLATE_FILL", description: "Text / math / matrix / table / diagram with blanks" },
   ];
 
   return (

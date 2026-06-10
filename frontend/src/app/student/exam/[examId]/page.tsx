@@ -53,6 +53,32 @@ function RichLatexOption({ latex }: { latex: string }) {
     : <span className="font-mono text-sm text-white/60">{latex}</span>;
 }
 
+/**
+ * Renders question HTML while also resolving any <span data-latex="…"> nodes
+ * inserted by the TipTap MathInline extension into live KaTeX.
+ */
+function MathRenderedText({ html, className }: { html: string; className?: string }) {
+  const [processed, setProcessed] = useState(html);
+
+  useEffect(() => {
+    if (!html || !html.includes("data-latex")) { setProcessed(html); return; }
+    (async () => {
+      try {
+        const katex = (await import("katex")).default;
+        const div = document.createElement("div");
+        div.innerHTML = html;
+        div.querySelectorAll<HTMLElement>("[data-latex]").forEach((el) => {
+          const ltx = el.getAttribute("data-latex") ?? "";
+          if (ltx) el.innerHTML = katex.renderToString(ltx, { throwOnError: false, displayMode: false });
+        });
+        setProcessed(div.innerHTML);
+      } catch { setProcessed(html); }
+    })();
+  }, [html]);
+
+  return <div className={className} dangerouslySetInnerHTML={{ __html: processed }} />;
+}
+
 /* ─── Phase machine ────────────────────────────── */
 type Phase = "loading-exam" | "password" | "ready" | "session-starting" | "taking" | "submitted";
 
@@ -1296,13 +1322,13 @@ export default function ExamTakingPage() {
               </div>
 
               {/* Question text — hidden for pure block-based questions whose text is just a backend placeholder */}
-              {q.text && q.text !== "[block-based question]" && (
+              {q.text && q.text !== "[block-based question]" && q.type !== "TEMPLATE_FILL" && (
                 q.type === "MULTI_BLANK_EQUATION" ? (
                   <p className="mb-6 text-lg leading-relaxed text-white sm:text-xl">{q.text}</p>
                 ) : (
-                  <div
+                  <MathRenderedText
+                    html={q.text}
                     className="qe-prose mb-6 text-lg leading-relaxed text-white sm:text-xl"
-                    dangerouslySetInnerHTML={{ __html: q.text }}
                   />
                 )
               )}
