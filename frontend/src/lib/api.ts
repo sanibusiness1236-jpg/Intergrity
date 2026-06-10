@@ -52,6 +52,9 @@ export function clearAuthTokens() {
 const api = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
+  // A free-tier backend can take 30-50s to wake from a cold start. Allow a
+  // generous timeout so a waking server still completes instead of failing fast.
+  timeout: 60000,
 });
 
 api.interceptors.request.use((config) => {
@@ -62,11 +65,58 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+const MAX_RETRIES = 3;
+const RETRY_DELAYS_MS = [1000, 3000, 6000];
+
+/**
+ * Decide whether a failed request is worth retrying. We only retry on
+ * transient conditions (no response = network/timeout, or 502/503/504 from a
+ * waking/overloaded server) and only on operations that are safe to repeat:
+ * all GETs plus the idempotent auth operations. Registration is excluded so a
+ * retry can never double-consume an invite link.
+ */
+function isRetryable(error: { config?: { method?: string; url?: string }; response?: { status?: number }; code?: string }): boolean {
+  const cfg = error.config;
+  if (!cfg) return false;
+  const status = error.response?.status;
+  const transient =
+    !error.response || // network error / timeout
+    error.code === "ECONNABORTED" ||
+    status === 502 ||
+    status === 503 ||
+    status === 504;
+  if (!transient) return false;
+
+  const method = (cfg.method || "get").toLowerCase();
+  const url = cfg.url || "";
+  const safeAuthOp = /\/auth\/(login|refresh|reset-password)$/.test(url);
+  return method === "get" || safeAuthOp;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
+
+    // ── Transient-failure retry (cold starts, brief 5xx, network blips) ──
+    if (original && isRetryable(error)) {
+      original.__retryCount = (original.__retryCount || 0) as number;
+      if (original.__retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAYS_MS[original.__retryCount] ?? 6000;
+        original.__retryCount += 1;
+        await sleep(delay);
+        return api(original);
+      }
+    }
+
+    // A 401 from the auth endpoints themselves means bad credentials / expired
+    // token — NOT an access-token expiry to silently refresh. Let the error
+    // propagate so the login form can show "Invalid credentials".
+    const isAuthEndpoint = /\/auth\//.test(original?.url || "");
+
+    if (error.response?.status === 401 && !original._retry && !isAuthEndpoint) {
       original._retry = true;
       try {
         const refreshToken = getRefreshToken();

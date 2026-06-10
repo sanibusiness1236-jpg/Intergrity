@@ -23,10 +23,22 @@ function withPoolDefaults(rawUrl) {
 
   // Minimum healthy values for a single Render web instance.
   const MIN_CONNECTION_LIMIT = 10;
-  const MIN_POOL_TIMEOUT = 20; // seconds
+  const MIN_POOL_TIMEOUT = 30; // seconds — how long a request waits for a free conn
+  const MIN_CONNECT_TIMEOUT = 15; // seconds — how long to wait for the initial TCP/TLS connect
 
   try {
     const url = new URL(rawUrl);
+
+    // Detect Supabase / PgBouncer transaction pooler (port 6543 or "pooler" host).
+    const isPooler =
+      url.port === "6543" || /pooler\./i.test(url.hostname);
+
+    // PgBouncer transaction mode requires Prisma to disable prepared statements.
+    // Without pgbouncer=true, sporadic "prepared statement already exists" errors
+    // surface under concurrency and look like random login failures.
+    if (isPooler && !url.searchParams.get("pgbouncer")) {
+      url.searchParams.set("pgbouncer", "true");
+    }
 
     const currentLimit = parseInt(url.searchParams.get("connection_limit") || "0", 10);
     if (!currentLimit || currentLimit < MIN_CONNECTION_LIMIT) {
@@ -36,6 +48,11 @@ function withPoolDefaults(rawUrl) {
     const currentTimeout = parseInt(url.searchParams.get("pool_timeout") || "0", 10);
     if (!currentTimeout || currentTimeout < MIN_POOL_TIMEOUT) {
       url.searchParams.set("pool_timeout", String(MIN_POOL_TIMEOUT));
+    }
+
+    const currentConnectTimeout = parseInt(url.searchParams.get("connect_timeout") || "0", 10);
+    if (!currentConnectTimeout || currentConnectTimeout < MIN_CONNECT_TIMEOUT) {
+      url.searchParams.set("connect_timeout", String(MIN_CONNECT_TIMEOUT));
     }
 
     return url.toString();

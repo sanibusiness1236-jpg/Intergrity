@@ -2,6 +2,7 @@ const http = require("http");
 const app = require("./app");
 const { initSocket } = require("./socket");
 const { port } = require("./config/env");
+const prisma = require("./config/db");
 
 const server = http.createServer(app);
 
@@ -9,8 +10,32 @@ initSocket(server);
 
 server.listen(port, () => {
   console.log(`INTEGRITY backend running on port ${port}`);
+  warmUpDatabase();
   startKeepAlive();
 });
+
+/**
+ * Establish the DB connection at boot instead of lazily on the first request.
+ * Prisma connects lazily by default, so the very first sign-in after a deploy
+ * or cold start pays the full connect cost and can time out. Connecting here
+ * (with a couple of retries) means the pool is ready before users arrive.
+ */
+async function warmUpDatabase(attempt = 1) {
+  try {
+    await prisma.$connect();
+    await prisma.$queryRaw`SELECT 1`;
+    console.log("Database connection warmed up and ready");
+  } catch (err) {
+    const MAX_ATTEMPTS = 5;
+    if (attempt < MAX_ATTEMPTS) {
+      const delay = attempt * 2000;
+      console.warn(`DB warm-up failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${delay}ms…`);
+      setTimeout(() => warmUpDatabase(attempt + 1), delay);
+    } else {
+      console.error("DB warm-up failed after max attempts:", err.message);
+    }
+  }
+}
 
 /**
  * Keep-alive self-ping.

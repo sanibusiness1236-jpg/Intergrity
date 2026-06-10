@@ -52,7 +52,10 @@ async function register(req, res, next) {
       }
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    // Cost 10 is the widely-used secure default and ~4x faster than 12.
+    // On a single-core free instance, cost 12 saturates the CPU during
+    // registration spikes and makes concurrent sign-ups/sign-ins time out.
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
       data: {
@@ -112,8 +115,11 @@ async function login(req, res, next) {
     const currentIp = req.ip;
     const currentUserAgent = req.get("user-agent") || "";
 
+    // Fire-and-forget: multi-device detection must NOT block the login response
+    // or hold a DB connection on the critical path. Under concurrent sign-ins
+    // awaiting this extra query starves the connection pool and times logins out.
     if (user.role === "STUDENT") {
-      await detectMultiDeviceLogin(user.id, currentIp, currentUserAgent);
+      detectMultiDeviceLogin(user.id, currentIp, currentUserAgent).catch(() => {});
     }
 
     const tokenPayload = { id: user.id, email: user.email, role: user.role };
@@ -206,7 +212,7 @@ async function resetPassword(req, res, next) {
       );
     }
 
-    const passwordHash = await bcrypt.hash(newPassword, 12);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
 
     res.json({ success: true, message: "Password reset successful. You can now sign in." });
