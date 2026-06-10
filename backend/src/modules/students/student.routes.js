@@ -9,6 +9,8 @@ router.use(authenticate);
 
 router.get("/", authorize("EXAMINER", "ADMIN"), ctrl.getStudents);
 router.get("/:studentId/exams", ctrl.getStudentExams);
-router.patch("/:id/toggle-status", authorize("ADMIN"), ctrl.toggleStudentStatus);
+router.patch("/:id/toggle-status", authorize("EXAMINER", "ADMIN"), ctrl.toggleStudentStatus);
+router.patch("/:id", authorize("EXAMINER", "ADMIN"), ctrl.updateStudent);
+router.post("/:id/reset-password", authorize("EXAMINER", "ADMIN"), ctrl.adminResetStudentPassword);
 
 module.exports = router;

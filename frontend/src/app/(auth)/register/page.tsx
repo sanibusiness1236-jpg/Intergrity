@@ -194,9 +194,10 @@ function RegisterForm() {
             <p className="text-xs font-medium uppercase tracking-wider text-white/50">Student details</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <GlowInput
-                placeholder="Student ID"
+                placeholder="Student ID (required)"
                 value={form.studentId}
                 onChange={(e) => update("studentId", e.target.value)}
+                required
               />
               <GlowInput
                 placeholder="Program"

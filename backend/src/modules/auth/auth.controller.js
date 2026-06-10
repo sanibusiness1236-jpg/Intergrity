@@ -210,18 +210,38 @@ async function resetPassword(req, res, next) {
 
     const user = await prisma.user.findUnique({ where: { email: String(email).trim() } });
 
-    // Always respond the same way for non-matching identities to avoid leaking
-    // which emails exist, but still enforce the student-ID + role checks.
-    const identityOk =
-      user &&
-      user.role === "STUDENT" &&
-      user.isActive &&
-      user.studentId &&
-      String(user.studentId).trim().toLowerCase() === String(studentId).trim().toLowerCase();
-
-    if (!identityOk) {
+    // Account existence / role / active checks
+    if (!user || user.role !== "STUDENT") {
       throw new AppError(
-        "We couldn't verify your identity. Check your email and student ID, or contact your examiner.",
+        "No student account found for that email address.",
+        400
+      );
+    }
+    if (!user.isActive) {
+      throw new AppError(
+        "Your account is inactive. Please contact your examiner.",
+        400
+      );
+    }
+
+    // Student-ID verification
+    if (!user.studentId) {
+      // Account was registered without a student ID — we cannot verify identity
+      // via student ID, so tell the student exactly why it failed rather than
+      // giving a confusing generic error.
+      throw new AppError(
+        "No student ID is on file for this account. Please contact your examiner to update your details, or ask them to reset your password directly.",
+        400
+      );
+    }
+
+    const idMatch =
+      String(user.studentId).trim().toLowerCase() ===
+      String(studentId).trim().toLowerCase();
+
+    if (!idMatch) {
+      throw new AppError(
+        "The student ID you entered does not match our records. Please double-check and try again.",
         400
       );
     }

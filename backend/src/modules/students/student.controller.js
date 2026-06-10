@@ -1,3 +1,4 @@
+const bcrypt = require("bcrypt");
 const prisma = require("../../config/db");
 const { AppError } = require("../../middleware/errorHandler");
 
@@ -83,4 +84,87 @@ async function toggleStudentStatus(req, res, next) {
   }
 }
 
-module.exports = { getStudents, getStudentExams, toggleStudentStatus };
+/**
+ * PATCH /api/students/:id
+ * Examiner can update a student's profile fields (studentId, program, gender).
+ * This is needed when a student registered without a student ID and therefore
+ * cannot use the self-service password-reset flow.
+ */
+async function updateStudent(req, res, next) {
+  try {
+    const student = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!student || student.role !== "STUDENT") {
+      throw new AppError("Student not found", 404);
+    }
+
+    const { studentId, program, gender, firstName, lastName } = req.body;
+    const data = {};
+
+    if (firstName !== undefined) data.firstName = String(firstName).trim() || undefined;
+    if (lastName  !== undefined) data.lastName  = String(lastName).trim()  || undefined;
+    if (program   !== undefined) data.program   = String(program).trim()   || null;
+    if (gender    !== undefined) data.gender    = String(gender).trim()    || null;
+
+    if (studentId !== undefined) {
+      const trimmed = String(studentId).trim();
+      if (trimmed) {
+        // Make sure no other student already has this ID
+        const conflict = await prisma.user.findUnique({ where: { studentId: trimmed } });
+        if (conflict && conflict.id !== student.id) {
+          throw new AppError("That student ID is already in use by another account.", 409);
+        }
+        data.studentId = trimmed;
+      } else {
+        data.studentId = null;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new AppError("No valid fields to update", 400);
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.params.id },
+      data,
+      select: {
+        id: true, email: true, firstName: true, lastName: true,
+        studentId: true, program: true, gender: true, isActive: true,
+      },
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    if (err?.code === "P2002") {
+      return next(new AppError("That student ID is already in use.", 409));
+    }
+    next(err);
+  }
+}
+
+/**
+ * POST /api/students/:id/reset-password
+ * Examiner-initiated password reset for a student — useful when the student
+ * has no student ID on file and cannot use self-service reset.
+ */
+async function adminResetStudentPassword(req, res, next) {
+  try {
+    const student = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!student || student.role !== "STUDENT") {
+      throw new AppError("Student not found", 404);
+    }
+
+    const { newPassword } = req.body;
+    if (!newPassword || String(newPassword).length < 6) {
+      throw new AppError("New password must be at least 6 characters.", 400);
+    }
+
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+    await prisma.user.update({ where: { id: req.params.id }, data: { passwordHash } });
+
+    res.json({ success: true, message: "Password reset successfully." });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getStudents, getStudentExams, toggleStudentStatus, updateStudent, adminResetStudentPassword };

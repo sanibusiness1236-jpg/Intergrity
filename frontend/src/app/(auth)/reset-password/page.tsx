@@ -58,8 +58,11 @@ export default function ResetPasswordPage() {
       await api.post("/auth/reset-password", { email, studentId, newPassword });
       setSuccess("Password reset successful. Redirecting to sign in…");
       setTimeout(() => router.replace("/login"), 1800);
-    } catch (err: any) {
-      setError(err.response?.data?.error?.message || "Could not reset password.");
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })
+          ?.response?.data?.error?.message;
+      setError(msg || "Could not reset password. Please check your details and try again.");
     } finally {
       setLoading(false);
     }
@@ -71,7 +74,7 @@ export default function ResetPasswordPage() {
         <div className="space-y-2 text-center">
           <h1 className="text-3xl font-extrabold tracking-tight text-white md:text-4xl">Reset password</h1>
           <p className="text-sm text-white/60">
-            Verify your identity with your account email and student ID to set a new password.
+            Verify your identity with your account email and the student ID you used when registering.
           </p>
         </div>
 
