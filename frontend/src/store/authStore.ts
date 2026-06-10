@@ -33,16 +33,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   register: async (formData) => {
     set({ isLoading: true });
     try {
-      const role = formData.role;
+      // Send every non-empty field. The role is decided server-side by the
+      // invite token, so we must NOT strip studentId/program/gender here — the
+      // backend already ignores those fields for non-student roles. Stripping
+      // them on the client previously dropped the student ID entirely, which
+      // broke the self-service password reset.
       const payload: Record<string, string> = {};
       for (const [k, v] of Object.entries(formData)) {
         if (typeof v === "string" && v.trim() === "") continue;
         payload[k] = v;
-      }
-      if (role !== "STUDENT") {
-        delete payload.studentId;
-        delete payload.program;
-        delete payload.gender;
       }
       const { data } = await api.post("/auth/register", payload);
       setAuthTokens(data.data.accessToken, data.data.refreshToken);
