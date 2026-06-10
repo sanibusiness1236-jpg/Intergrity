@@ -21,7 +21,7 @@ const examValidation = [
 ];
 
 const questionValidation = [
-  body("type").isIn(["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION"]),
+  body("type").isIn(["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION", "TEMPLATE_FILL"]),
   body("text").trim().notEmpty(),
   body("correctAnswer").notEmpty(),
   body("marks").optional().isInt({ min: 1 }),

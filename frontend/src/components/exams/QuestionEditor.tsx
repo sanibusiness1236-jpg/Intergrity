@@ -21,6 +21,8 @@ import {
   TemplateFillCreator,
   serializeTemplateFill,
   deserializeTemplateFill,
+  makeDefaultConfig,
+  syncAnswerKey,
   type TemplateFillValue,
 } from "./TemplateFillCreator";
 import api from "@/lib/api";
@@ -201,13 +203,18 @@ export function formToPayload(form: QuestionFormValue): {
   if (isNaN(form.marks)) return { payload: null, error: "Marks must be a number" };
 
   if (form.type === "MCQ") {
-    const richOpts = form.richOptions.filter((o) => {
+    const filteredOpts = form.richOptions.filter((o) => {
       if (o.displayType === "text") return o.value.trim() !== "";
       if (o.displayType === "latex") return o.content.trim() !== "";
       if (o.displayType === "image") return o.url.trim() !== "";
       return false;
     });
-    if (richOpts.length < 2) return { payload: null, error: "MCQ needs at least 2 options" };
+    if (filteredOpts.length < 2) return { payload: null, error: "MCQ needs at least 2 options" };
+    // Auto-fill value if blank — use option letter as stable key (A, B, C …)
+    const richOpts = filteredOpts.map((o, i) => ({
+      ...o,
+      value: o.value.trim() || String.fromCharCode(65 + i),
+    }));
     const correctOpt = richOpts.find((o) => o.value === form.correctAnswerStr);
     if (!correctOpt) return { payload: null, error: "Select which option is correct" };
     const serialisedOpts = richOpts.map(richOptToStorage);
@@ -751,8 +758,17 @@ function RichMCQOptions({
           key={opt.id}
           opt={opt}
           index={i}
-          isCorrect={!!(correctId && correctId === opt.value)}
-          onSelect={() => onSelectCorrect(opt.value)}
+          isCorrect={!!(correctId && opt.value && correctId === opt.value)}
+          onSelect={() => {
+            // If value not yet set for this option, auto-assign the option letter
+            const stableValue = opt.value.trim() || String.fromCharCode(65 + i);
+            if (!opt.value.trim()) {
+              const next = [...richOptions];
+              next[i] = { ...opt, value: stableValue };
+              onChangeOptions(next);
+            }
+            onSelectCorrect(stableValue);
+          }}
           onChange={(updated) => {
             const next = [...richOptions];
             next[i] = updated;
@@ -810,6 +826,11 @@ export function QuestionEditor({
   }
 
   function changeType(t: QuestionType) {
+    let initialTemplateFill: TemplateFillValue | null = null;
+    if (t === "TEMPLATE_FILL") {
+      const defaultCfg = makeDefaultConfig("text");
+      initialTemplateFill = { config: defaultCfg, answerKey: syncAnswerKey(defaultCfg.blankOrder, {}) };
+    }
     setForm({
       ...form,
       type: t,
@@ -818,7 +839,7 @@ export function QuestionEditor({
       acceptedAnswers: [""],
       caseSensitive: false,
       richOptions: [emptyRichOption(), emptyRichOption(), emptyRichOption(), emptyRichOption()],
-      templateFill: null,
+      templateFill: initialTemplateFill,
     });
   }
 

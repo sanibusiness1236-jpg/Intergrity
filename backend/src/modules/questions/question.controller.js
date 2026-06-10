@@ -73,12 +73,24 @@ async function uploadMedia(req, res, next) {
   }
 }
 
-const VALID_TYPES = ["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION"];
+const VALID_TYPES = ["MCQ", "TRUE_FALSE", "FILL_IN_BLANK", "MULTI_BLANK_EQUATION", "TEMPLATE_FILL"];
 
 function validateQuestionPayload({ type, text, correctAnswer, options }) {
   if (!type || !VALID_TYPES.includes(type)) {
     throw new AppError(`Invalid question type. Must be one of: ${VALID_TYPES.join(", ")}`, 400);
   }
+
+  // TEMPLATE_FILL stores JSON in text and an object in correctAnswer
+  if (type === "TEMPLATE_FILL") {
+    if (!text || typeof text !== "string" || !text.trim()) {
+      throw new AppError("Template configuration is required", 400);
+    }
+    if (!correctAnswer || typeof correctAnswer !== "object" || Array.isArray(correctAnswer)) {
+      throw new AppError("Template fill needs an answer key object", 400);
+    }
+    return;
+  }
+
   if (!text || typeof text !== "string" || !text.trim()) {
     throw new AppError("Question text is required", 400);
   }
@@ -89,7 +101,9 @@ function validateQuestionPayload({ type, text, correctAnswer, options }) {
     if (!Array.isArray(options) || options.length < 2) {
       throw new AppError("MCQ questions need at least 2 options", 400);
     }
-    if (!options.includes(correctAnswer)) {
+    // Support both plain string options and rich option objects {value, displayType, ...}
+    const optionValues = options.map((o) => (typeof o === "string" ? o : (o && o.value) || ""));
+    if (!optionValues.includes(correctAnswer)) {
       throw new AppError("Correct answer must match one of the options", 400);
     }
   }

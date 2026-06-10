@@ -92,7 +92,7 @@ function blanksFromDiagram(blanks: Record<string, DiagramBlankPos>): string[] {
   return Object.keys(blanks);
 }
 
-function makeDefaultConfig(type: TemplateType): TemplateConfig {
+export function makeDefaultConfig(type: TemplateType): TemplateConfig {
   switch (type) {
     case "text":
       return { __tf: true, stem: "", templateType: "text", content: "The capital of BLANK_1 is BLANK_2.", blankOrder: ["BLANK_1", "BLANK_2"] };
@@ -111,7 +111,7 @@ function makeEmptySpec(): BlankSpec {
   return { answers: [""], caseSensitive: false };
 }
 
-function syncAnswerKey(
+export function syncAnswerKey(
   blankOrder: string[],
   existing: Record<string, BlankSpec>
 ): Record<string, BlankSpec> {
@@ -565,6 +565,16 @@ export function TemplateFillCreator({ value, onChange }: TemplateFillCreatorProp
   const [answerKey, setAnswerKey] = useState<Record<string, BlankSpec>>(() =>
     value?.answerKey ?? syncAnswerKey(value?.config?.blankOrder ?? ["BLANK_1", "BLANK_2"], {})
   );
+
+  // Fire initial value on mount so the parent form is never left with null templateFill
+  useEffect(() => {
+    if (!value) {
+      const defaultCfg = makeDefaultConfig("text");
+      const defaultKey = syncAnswerKey(defaultCfg.blankOrder, {});
+      onChange({ config: defaultCfg, answerKey: defaultKey });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function setConfig(next: TemplateConfig) {
     const synced = syncAnswerKey(next.blankOrder, answerKey);

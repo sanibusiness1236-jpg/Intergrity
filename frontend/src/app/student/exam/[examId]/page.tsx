@@ -1345,9 +1345,12 @@ export default function ExamTakingPage() {
                   {(q.options as (string | { displayType?: string; value?: string; content?: string; url?: string })[]).map((raw, i) => {
                     // Normalise: string or rich option object
                     const isRich = raw && typeof raw === "object";
-                    const optValue = isRich ? ((raw as {value?: string}).value ?? String(i)) : (raw as string);
+                    // Use || (not ??) so empty-string values also get the fallback unique key
+                    const optValue = isRich
+                      ? (((raw as {value?: string}).value || "") || `__opt_${i}`)
+                      : (raw as string);
                     const displayType = isRich ? ((raw as {displayType?: string}).displayType ?? "text") : "text";
-                    const content = isRich ? ((raw as {content?: string}).content ?? optValue) : (raw as string);
+                    const content = isRich ? ((raw as {content?: string}).content ?? "") : (raw as string);
                     const imgUrl = isRich ? ((raw as {url?: string}).url ?? "") : "";
                     const selected = answers[q.id] === optValue;
                     return (
