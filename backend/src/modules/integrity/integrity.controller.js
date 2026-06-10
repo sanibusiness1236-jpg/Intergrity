@@ -660,7 +660,7 @@ async function deleteSessionData(req, res, next) {
     const { examId, password } = req.body;
     if (!examId || !password) throw new AppError("examId and password are required", 400);
 
-    const bcrypt = require("bcryptjs");
+    const bcrypt = require("bcrypt");
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user) throw new AppError("User not found", 404);
 

@@ -1,4 +1,7 @@
-const bcrypt = require("bcryptjs");
+// Native bcrypt (compiled C++ addon) is 2-3x faster than bcryptjs under
+// concurrent load because it releases the Node event loop during hashing.
+// bcryptjs blocks the entire event loop, serialising every login.
+const bcrypt = require("bcrypt");
 const prisma = require("../../config/db");
 const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../../utils/jwt");
 const { AppError } = require("../../middleware/errorHandler");
@@ -110,6 +113,17 @@ async function login(req, res, next) {
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       throw new AppError("Invalid credentials", 401);
+    }
+
+    // Opportunistic re-hash: if this password was stored at a higher cost than
+    // our current target (10), silently downgrade it in the background so future
+    // logins for this user are faster. Runs entirely after the response is sent.
+    const TARGET_COST = 10;
+    const rounds = bcrypt.getRounds(user.passwordHash);
+    if (rounds > TARGET_COST) {
+      bcrypt.hash(password, TARGET_COST)
+        .then((newHash) => prisma.user.update({ where: { id: user.id }, data: { passwordHash: newHash } }))
+        .catch(() => {}); // never block or surface to the user
     }
 
     const currentIp = req.ip;
