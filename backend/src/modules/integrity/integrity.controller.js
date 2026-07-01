@@ -426,40 +426,54 @@ async function predictExamIntegrity(req, res, next) {
 }
 
 /* ─── Live Session ─────────────────────────────────────────── */
-async function getLiveSessions(req, res, next) {
-  try {
-    const { examId, search, gender } = req.query;
-    if (!examId) throw new AppError("examId is required", 400);
+//
+// PERFORMANCE: the examiner live monitor polls this endpoint every few
+// seconds, and many examiners can watch the same exam at once. Without
+// protection that meant one heavy DB query (all sessions + ALL behavioral
+// flags joined) per examiner per poll — the single biggest source of load
+// when "a lot of people hop on".
+//
+// Two mitigations:
+//   1. Only the flag fields we actually use are selected (flagType,
+//      metadata, createdAt) instead of the full row, slashing the payload.
+//   2. The computed result is cached in-process for a few seconds and keyed
+//      by (examiner id + exam id set), so N simultaneous polls collapse into
+//      a single DB round-trip. Real-time accuracy is preserved because the
+//      client also receives instant `flag:new` socket events between polls.
+const LIVE_CACHE_MS = Number(process.env.LIVE_SESSIONS_CACHE_MS || 4000);
+const _liveCache = new Map(); // key -> { ts, payload: { exams, rows } }
 
-    // Accept ONE examId, or several comma-separated examIds for simultaneous monitoring
-    const examIds = String(examId)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+async function buildLiveData(userId, examIds) {
+  const exams = await prisma.exam.findMany({
+    where: { id: { in: examIds }, createdById: userId },
+    select: { id: true, title: true, courseCode: true, courseName: true, examType: true, examTypeOther: true, durationMinutes: true },
+  });
+  if (exams.length === 0) return null;
 
-    const exams = await prisma.exam.findMany({
-      where: { id: { in: examIds }, createdById: req.user.id },
-      select: { id: true, title: true, courseCode: true, courseName: true, examType: true, examTypeOther: true, durationMinutes: true },
-    });
-    if (exams.length === 0) throw new AppError("Exam not found", 404);
+  const examById = Object.fromEntries(exams.map((e) => [e.id, e]));
 
-    const examById = Object.fromEntries(exams.map((e) => [e.id, e]));
-
-    const sessions = await prisma.examSession.findMany({
-      where: { examId: { in: exams.map((e) => e.id) } },
-      include: {
-        student: {
-          select: { id: true, firstName: true, lastName: true, email: true, studentId: true, gender: true, program: true },
-        },
-        behavioralFlags: { orderBy: { createdAt: "asc" } },
-        seatingAssignment: { include: { venue: { select: { id: true, name: true } } } },
+  const sessions = await prisma.examSession.findMany({
+    where: { examId: { in: exams.map((e) => e.id) } },
+    select: {
+      id: true,
+      examId: true,
+      status: true,
+      startedAt: true,
+      submittedAt: true,
+      student: {
+        select: { id: true, firstName: true, lastName: true, email: true, studentId: true, gender: true, program: true },
       },
-      orderBy: { startedAt: "desc" },
-    });
+      // Only the three fields the row builder reads — avoids shipping id /
+      // sessionId / studentId for every flag (tens of thousands of rows).
+      behavioralFlags: { select: { flagType: true, metadata: true, createdAt: true }, orderBy: { createdAt: "asc" } },
+      seatingAssignment: { select: { venue: { select: { id: true, name: true } } } },
+    },
+    orderBy: { startedAt: "desc" },
+  });
 
-    const now = new Date();
+  const now = new Date();
 
-    let rows = sessions.map((s) => {
+  const rows = sessions.map((s) => {
       const flagsOf = (t) => s.behavioralFlags.filter((f) => f.flagType === t);
       const cf = (t) => flagsOf(t).length;
 
@@ -545,6 +559,44 @@ async function getLiveSessions(req, res, next) {
         startedAt: s.startedAt,
       };
     });
+
+  return { exams, rows };
+}
+
+async function getLiveDataCached(userId, examIds) {
+  const key = `${userId}|${[...examIds].sort().join(",")}`;
+  const hit = _liveCache.get(key);
+  if (hit && Date.now() - hit.ts < LIVE_CACHE_MS) return hit.payload;
+
+  const payload = await buildLiveData(userId, examIds);
+  if (payload) {
+    _liveCache.set(key, { ts: Date.now(), payload });
+    // Opportunistic eviction so the cache can't grow unbounded across many
+    // examiners / exam-id combinations over a long-running process.
+    if (_liveCache.size > 500) {
+      const cutoff = Date.now() - LIVE_CACHE_MS;
+      for (const [k, v] of _liveCache) if (v.ts < cutoff) _liveCache.delete(k);
+    }
+  }
+  return payload;
+}
+
+async function getLiveSessions(req, res, next) {
+  try {
+    const { examId, search, gender } = req.query;
+    if (!examId) throw new AppError("examId is required", 400);
+
+    // Accept ONE examId, or several comma-separated examIds for simultaneous monitoring
+    const examIds = String(examId)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const data = await getLiveDataCached(req.user.id, examIds);
+    if (!data) throw new AppError("Exam not found", 404);
+
+    const { exams } = data;
+    let rows = data.rows;
 
     if (search) {
       const q = search.toLowerCase();

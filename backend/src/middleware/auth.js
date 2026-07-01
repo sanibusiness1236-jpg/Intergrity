@@ -1,6 +1,17 @@
 const { verifyAccessToken } = require("../utils/jwt");
 const { AppError } = require("./errorHandler");
 const prisma = require("../config/db");
+const redis = require("../config/redis");
+
+// Every authenticated request previously hit Postgres to re-read the user's
+// role / active status. Under load (hundreds of students polling + auto-saving)
+// that single query dominated DB connection-pool usage. We now cache the tiny
+// user record in Redis for a short window so the vast majority of requests skip
+// the DB entirely. The TTL is deliberately short so role changes / deactivation
+// still take effect within seconds, and when Redis is unavailable we transparently
+// fall back to the DB (safeRedis returns null), so behaviour is never broken.
+const AUTH_CACHE_PREFIX = "authuser:";
+const AUTH_CACHE_TTL = Number(process.env.AUTH_CACHE_TTL || 30); // seconds
 
 /**
  * Validates the Bearer JWT, then fetches the user's CURRENT role directly
@@ -21,11 +32,24 @@ async function authenticate(req, _res, next) {
     const token = header.split(" ")[1];
     const decoded = verifyAccessToken(token);
 
-    // Always read the live role and active status from the DB.
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: { id: true, email: true, role: true, isActive: true },
-    });
+    // Read the live role / active status, preferring a short-lived Redis cache
+    // and falling back to the DB on a cache miss (or when Redis is offline).
+    let user = null;
+    const cacheKey = `${AUTH_CACHE_PREFIX}${decoded.id}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      try { user = JSON.parse(cached); } catch { user = null; }
+    }
+
+    if (!user) {
+      user = await prisma.user.findUnique({
+        where: { id: decoded.id },
+        select: { id: true, email: true, role: true, isActive: true },
+      });
+      if (user) {
+        await redis.setex(cacheKey, AUTH_CACHE_TTL, JSON.stringify(user));
+      }
+    }
 
     if (!user) {
       return next(new AppError("Account not found", 401));

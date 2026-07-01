@@ -3,9 +3,7 @@ const axios = require("axios");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const pdfParse = require("pdf-parse");
-const mammoth = require("mammoth");
-const Tesseract = require("tesseract.js");
+const { Worker } = require("worker_threads");
 const { AppError } = require("../../middleware/errorHandler");
 
 const HF_TOKEN = process.env.HF_TOKEN || "";
@@ -39,47 +37,41 @@ const upload = multer({
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. TEXT EXTRACTION — fully local, no ML service dependency
 // ═══════════════════════════════════════════════════════════════════════════════
-async function extractTextFromFile(filePath, mimetype, originalName) {
-  const buf = fs.readFileSync(filePath);
-  const lower = (originalName || "").toLowerCase();
+// The actual parsing (OCR / PDF / DOCX) is CPU-heavy and runs in a worker
+// thread (extract.worker.js) so it never blocks the main event loop that
+// serves live exam traffic. This function just dispatches to that worker and
+// awaits the result.
+const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS || 120_000);
 
-  // PDF ──────────────────────────────────────────────────────────────────────
-  if (mimetype.includes("pdf") || lower.endsWith(".pdf")) {
-    try {
-      const data = await pdfParse(buf);
-      return (data.text || "").trim();
-    } catch (e) {
-      throw new AppError(`PDF parse error: ${e.message}`, 400);
-    }
-  }
+function extractTextFromFile(filePath, mimetype, originalName) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const worker = new Worker(path.join(__dirname, "extract.worker.js"), {
+      workerData: { filePath, mimetype, originalName },
+    });
 
-  // DOCX ─────────────────────────────────────────────────────────────────────
-  if (
-    mimetype.includes("word") ||
-    mimetype.includes("officedocument") ||
-    lower.endsWith(".docx") ||
-    lower.endsWith(".doc")
-  ) {
-    try {
-      const result = await mammoth.extractRawText({ buffer: buf });
-      return (result.value || "").trim();
-    } catch (e) {
-      throw new AppError(`DOCX parse error: ${e.message}`, 400);
-    }
-  }
+    const done = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate().catch(() => {});
+      fn(arg);
+    };
 
-  // Image (OCR) ──────────────────────────────────────────────────────────────
-  if (mimetype.startsWith("image/") || /\.(jpe?g|png)$/.test(lower)) {
-    try {
-      const { data } = await Tesseract.recognize(buf, "eng", { logger: () => {} });
-      return (data.text || "").trim();
-    } catch (e) {
-      throw new AppError(`OCR error: ${e.message}`, 400);
-    }
-  }
+    const timer = setTimeout(
+      () => done(reject, new AppError("File processing timed out. Try a smaller or clearer file.", 408)),
+      EXTRACT_TIMEOUT_MS
+    );
 
-  // Plain text fallback
-  return buf.toString("utf-8");
+    worker.on("message", (msg) => {
+      if (msg && msg.ok) done(resolve, msg.text);
+      else done(reject, new AppError(msg && msg.error ? msg.error : "Could not read the file.", 400));
+    });
+    worker.on("error", (err) => done(reject, err));
+    worker.on("exit", (code) => {
+      if (code !== 0) done(reject, new AppError("File processing failed unexpectedly.", 500));
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -196,7 +188,8 @@ async function callHFInference(prompt, maxTokens = 1500) {
         },
         {
           headers: { Authorization: `Bearer ${HF_TOKEN}` },
-          timeout: 90_000,
+          // Capped so a slow/cold HF model can't tie up resources for minutes.
+          timeout: Number(process.env.HF_TIMEOUT_MS || 30_000),
         }
       );
       const data = resp.data;

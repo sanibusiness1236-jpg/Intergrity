@@ -5,8 +5,43 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: free                  # change to "starter" or higher for always-on
     healthCheckPath: /health
+
+    # ── Instance size (vertical scale) ───────────────────────────────────────
+    # Standard = 2 GB RAM / 1 CPU. This is the practical minimum for a real
+    # exam load: the OCR worker thread, many websocket connections, and bcrypt
+    # logins all need headroom that the 512 MB free/starter tiers don't have.
+    # For very large cohorts (1000+ concurrent) move to "pro" (4 GB / 2 CPU).
+    plan: standard
+
+    # ── Horizontal scale (multiple instances behind Render's load balancer) ──
+    # Manual scaling works on ALL paid plans. 3 instances comfortably handles
+    # the login spike at the start of an exam and the submit spike at the end.
+    # Bump this up for bigger cohorts (each Standard instance handles a few
+    # hundred concurrent students with these optimizations).
+    #
+    # IMPORTANT: multiple instances REQUIRE REDIS_URL to be set (see below) so
+    # the Socket.IO Redis adapter can share live-monitoring rooms / presence
+    # across instances. Without it, real-time monitoring fragments per instance.
+    numInstances: 3
+
+    # ── Autoscaling (Pro workspace and above only) ───────────────────────────
+    # If you are on a Pro plan, DELETE `numInstances` above and uncomment this
+    # block to scale automatically with load (autoscaling overrides numInstances).
+    # scaling:
+    #   minInstances: 2
+    #   maxInstances: 8
+    #   targetCPUPercent: 65
+    #   targetMemoryPercent: 75
+
+    # Give in-flight exam requests up to 2 minutes to finish before an instance
+    # is shut down during a deploy or scale-down (default is only 30s).
+    maxShutdownDelaySeconds: 120
+
+    # Run schema migrations + super-admin seed ONCE per deploy (not on every
+    # instance boot). Render runs this a single time before routing traffic to
+    # the new version, which is exactly what a multi-instance setup needs.
+    preDeployCommand: "npx prisma migrate deploy && node prisma/seed.js"
 
     envVars:
       # ── Keep-alive: self-ping so the free tier never cold-starts ──────────
@@ -40,6 +75,10 @@ services:
         sync: false
       - key: SUPABASE_LOGO_BUCKET
         value: institution-logos
+      # REQUIRED when running more than one instance: the Socket.IO Redis
+      # adapter uses this to share live-monitoring rooms/presence across
+      # instances, and the auth-cache lives here too. Use a hosted Redis
+      # (e.g. Upstash) in the same region as this service for best latency.
       - key: REDIS_URL
         sync: false
       - key: JWT_SECRET

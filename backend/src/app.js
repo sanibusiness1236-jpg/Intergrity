@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
 
 const { errorHandler } = require("./middleware/errorHandler");
 const { corsOrigin } = require("./config/env");
@@ -23,6 +24,11 @@ const anomalyRoutes = require("./modules/anomaly/anomaly.routes");
 
 const app = express();
 
+// Behind Render/Vercel/any reverse proxy the client IP arrives in
+// X-Forwarded-For. Trusting the first proxy hop makes req.ip (and therefore
+// the rate limiters below) key on the real client IP instead of the proxy's.
+app.set("trust proxy", 1);
+
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(
   cors({
@@ -34,6 +40,36 @@ app.use(
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// ── Rate limiting ──
+// Protects the process from request floods (the "lots of people hop on"
+// scenario, accidental client retry storms, or abuse). Limits are generous
+// enough not to interfere with a legitimate exam sitting, where each student
+// makes a steady but bounded number of requests.
+const isProd = process.env.NODE_ENV === "production";
+
+// Global limiter — broad ceiling per IP across the whole API.
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_GLOBAL || 600), // ~10 req/s sustained per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  // /health is hit by the platform keep-alive ping; never throttle it.
+  skip: (req) => req.path === "/health" || !isProd,
+});
+
+// Auth limiter — much stricter, targeting login/registration brute-force and
+// the bcrypt-driven CPU spikes that happen during sign-in storms.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_AUTH || 50),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true, // only failed attempts count toward the cap
+  skip: () => !isProd,
+});
+
+app.use(globalLimiter);
 
 // ── Performance monitoring ──
 // Log any request slower than the threshold so bottlenecks under heavy
@@ -66,7 +102,7 @@ app.get("/health", (_req, res) => {
   res.json({ status: "healthy", service: "INTEGRITY Backend", ts: Date.now() });
 });
 
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 // Institution brand rarely changes — cache 60 s in the browser
 app.use("/api/institutions", cacheFor(60), institutionRoutes);
 // Exam list/detail: 15 s cache so dashboards feel instant on re-visit

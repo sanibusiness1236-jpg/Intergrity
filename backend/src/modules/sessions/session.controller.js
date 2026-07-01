@@ -204,21 +204,32 @@ async function submitExam(req, res, next) {
 
     await redis.del(`${AUTOSAVE_PREFIX}${sessionId}`);
 
-    // Record submission IP and check for IP-based anomalies (non-fatal)
-    try {
-      const submissionIp = getClientIp(req);
-      if (submissionIp) {
+    // Respond immediately. When time expires every student submits at once —
+    // awaiting the extra IP-anomaly queries here would hold a DB connection on
+    // the critical path and starve the pool during that spike.
+    res.json({
+      success: true,
+      data: { score: totalScore, maxScore, percentage: maxScore > 0 ? ((totalScore / maxScore) * 100).toFixed(2) : 0 },
+    });
+
+    // Record submission IP and check for IP-based anomalies — fire-and-forget,
+    // strictly after the response. Failures are non-fatal and never surface.
+    const submissionIp = getClientIp(req);
+    const userId = req.user.id;
+    const examId = session.examId;
+    setImmediate(async () => {
+      try {
+        if (!submissionIp) return;
         await prisma.examSession.update({
           where: { id: sessionId },
           data: { ipAddress: submissionIp },
         });
 
-        // Find other sessions with the same IP for this exam
         const sharedIpSessions = await prisma.examSession.findMany({
           where: {
-            examId: session.examId,
+            examId,
             ipAddress: submissionIp,
-            studentId: { not: req.user.id },
+            studentId: { not: userId },
             status: { in: ["SUBMITTED", "IN_PROGRESS", "TIMED_OUT"] },
           },
         });
@@ -227,7 +238,7 @@ async function submitExam(req, res, next) {
           await prisma.behavioralFlag.create({
             data: {
               sessionId,
-              studentId: req.user.id,
+              studentId: userId,
               flagType: "IP_ANOMALY",
               metadata: {
                 sharedIp: submissionIp,
@@ -238,14 +249,9 @@ async function submitExam(req, res, next) {
             },
           });
         }
+      } catch (_) {
+        // Non-fatal — anomaly detection must not affect submission.
       }
-    } catch (_) {
-      // Non-fatal — anomaly detection must not block submission
-    }
-
-    res.json({
-      success: true,
-      data: { score: totalScore, maxScore, percentage: maxScore > 0 ? ((totalScore / maxScore) * 100).toFixed(2) : 0 },
     });
   } catch (err) {
     next(err);

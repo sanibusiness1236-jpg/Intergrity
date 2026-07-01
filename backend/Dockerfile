@@ -15,6 +15,7 @@ COPY . .
 
 EXPOSE 5000
 
-# Apply any pending schema changes (creates indexes, new tables, etc.)
-# then start the server.
-CMD ["sh", "-c", "npx prisma migrate deploy && node prisma/seed.js && node src/server.js"]
+# Just start the server. Database migrations and seeding run ONCE per deploy
+# via the Blueprint `preDeployCommand` (see render.yaml) instead of here — so
+# that with multiple instances they don't run concurrently on every boot.
+CMD ["node", "src/server.js"]

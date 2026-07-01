@@ -16,6 +16,33 @@ const recentMultiDeviceAt = new Map(); // sessionId -> timestamp
 
 const MULTI_DEVICE_COOLDOWN_MS = 60_000;
 
+// Periodically evict stale cooldown entries so this map can't grow unbounded
+// over a long-running process (a slow memory leak across many exams).
+setInterval(() => {
+  const cutoff = Date.now() - MULTI_DEVICE_COOLDOWN_MS;
+  for (const [sessionId, ts] of recentMultiDeviceAt) {
+    if (ts < cutoff) recentMultiDeviceAt.delete(sessionId);
+  }
+}, 5 * 60_000).unref();
+
+/**
+ * Lightweight per-socket, per-event token limiter. Prevents a single
+ * connection from flooding DB-writing socket events (which would otherwise be
+ * a trivial denial-of-service vector). Generous enough for legitimate clients.
+ */
+function allowEvent(socket, key, max, windowMs) {
+  const now = Date.now();
+  socket.data._rl = socket.data._rl || {};
+  const bucket = socket.data._rl[key];
+  if (!bucket || now - bucket.start >= windowMs) {
+    socket.data._rl[key] = { start: now, count: 1 };
+    return true;
+  }
+  if (bucket.count >= max) return false;
+  bucket.count += 1;
+  return true;
+}
+
 async function recordMultiDeviceFlag(io, sessionId, studentId, extraMeta = {}) {
   const last = recentMultiDeviceAt.get(sessionId) || 0;
   if (Date.now() - last < MULTI_DEVICE_COOLDOWN_MS) return;
@@ -49,6 +76,7 @@ async function recordMultiDeviceFlag(io, sessionId, studentId, extraMeta = {}) {
 function setupMonitoring(io, socket) {
   // ── 1. Behavioral flag from the client ──────────────────────────
   socket.on("flag:report", async ({ sessionId, flagType, metadata }) => {
+    if (!allowEvent(socket, "flag:report", 120, 60_000)) return;
     try {
       const session = await prisma.examSession.findUnique({
         where: { id: sessionId },
@@ -83,6 +111,7 @@ function setupMonitoring(io, socket) {
 
   // ── 3. Student announces presence (multi-device detection) ──────
   socket.on("presence:join", async ({ sessionId }) => {
+    if (!allowEvent(socket, "presence:join", 20, 60_000)) return;
     try {
       const session = await prisma.examSession.findUnique({
         where: { id: sessionId },

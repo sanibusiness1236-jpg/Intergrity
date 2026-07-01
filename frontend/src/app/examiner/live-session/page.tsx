@@ -222,8 +222,21 @@ export default function LiveSessionPage() {
     }
     setLoading(true);
     poll().finally(() => setLoading(false));
-    const timer = setInterval(poll, 5000);
-    return () => { active = false; clearInterval(timer); };
+    // This poll is only a reconciliation fallback — live changes already
+    // arrive instantly via the `flag:new` socket event below. Using a longer,
+    // jittered interval stops many examiners from hitting the backend on the
+    // exact same tick (which was a major source of load with the old 5s poll).
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const delay = 15000 + Math.floor(Math.random() * 5000);
+      timer = setTimeout(async () => {
+        if (!active) return;
+        await poll();
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => { active = false; clearTimeout(timer); };
   }, [selectedExamIds, search, genderFilter]);
 
   /* ── Real-time socket: instant flag updates ─────────────────
