@@ -494,7 +494,13 @@ export default function ExamTakingPage() {
     if (phase !== "taking" || timeLeft <= 0 || !session) return;
     const t = setInterval(() => {
       setTimeLeft((s) => {
-        if (s <= 1) { handleSubmit(true); return 0; }
+        if (s <= 1) {
+          // Spread submissions over a 0–8 s window so all students whose
+          // timers expire at the same second don't hit the DB simultaneously.
+          const jitter = Math.floor(Math.random() * 8000);
+          setTimeout(() => handleSubmit(true), jitter);
+          return 0;
+        }
         return s - 1;
       });
     }, 1000);
@@ -603,7 +609,10 @@ export default function ExamTakingPage() {
   useEffect(() => {
     if (phase === "taking" && timeLeft === 0 && session && !hasAutoSubmittedRef.current) {
       hasAutoSubmittedRef.current = true;
-      handleSubmit(true);
+      // Same jitter as the countdown path so a browser refresh during the
+      // final second doesn't cause a second synchronised submission storm.
+      const jitter = Math.floor(Math.random() * 8000);
+      setTimeout(() => handleSubmit(true), jitter);
     }
   }, [phase, timeLeft, session, handleSubmit]);
 

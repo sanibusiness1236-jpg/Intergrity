@@ -2,8 +2,29 @@ const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 const multer = require("multer");
 const prisma = require("../../config/db");
+const redis = require("../../config/redis");
 const { AppError } = require("../../middleware/errorHandler");
 const { getSupabaseClient } = require("../../config/supabase");
+
+// Cache GET /questions/exam/:examId in Redis so all students who start the
+// same exam at the same moment share a single DB read.
+// TTL: 30 s — fresh enough for live exams, cheap enough at any concurrency.
+const QUESTIONS_CACHE_PREFIX = "questions:exam:";
+const QUESTIONS_CACHE_TTL    = 30; // seconds
+
+async function getCachedQuestions(examId) {
+  const raw = await redis.get(`${QUESTIONS_CACHE_PREFIX}${examId}`);
+  if (raw) { try { return JSON.parse(raw); } catch { /* fall through */ } }
+  return null;
+}
+
+async function setCachedQuestions(examId, questions) {
+  await redis.setex(`${QUESTIONS_CACHE_PREFIX}${examId}`, QUESTIONS_CACHE_TTL, JSON.stringify(questions));
+}
+
+async function invalidateQuestionsCache(examId) {
+  await redis.del(`${QUESTIONS_CACHE_PREFIX}${examId}`);
+}
 
 const MEDIA_BUCKET = "question-media";
 
@@ -164,6 +185,7 @@ async function addQuestion(req, res, next) {
       data: { totalMarks: { increment: question.marks } },
     });
 
+    await invalidateQuestionsCache(examId);
     res.status(201).json({ success: true, data: question });
   } catch (err) {
     next(err);
@@ -213,6 +235,7 @@ async function addBulkQuestions(req, res, next) {
       data: { totalMarks: { increment: totalNewMarks } },
     });
 
+    await invalidateQuestionsCache(examId);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     next(err);
@@ -221,10 +244,21 @@ async function addBulkQuestions(req, res, next) {
 
 async function getQuestions(req, res, next) {
   try {
+    const { examId } = req.params;
+
+    // Serve from Redis cache when available — critical during exam start storms
+    // where hundreds of students fetch the same question list simultaneously.
+    const cached = await getCachedQuestions(examId);
+    if (cached) {
+      return res.json({ success: true, data: cached });
+    }
+
     const questions = await prisma.question.findMany({
-      where: { examId: req.params.examId },
+      where: { examId },
       orderBy: { order: "asc" },
     });
+
+    await setCachedQuestions(examId, questions);
     res.json({ success: true, data: questions });
   } catch (err) {
     next(err);
@@ -267,6 +301,7 @@ async function updateQuestion(req, res, next) {
       });
     }
 
+    await invalidateQuestionsCache(existing.examId);
     res.json({ success: true, data: question });
   } catch (err) {
     next(err);
@@ -293,6 +328,7 @@ async function deleteQuestion(req, res, next) {
       data: { totalMarks: { decrement: question.marks } },
     });
 
+    await invalidateQuestionsCache(question.examId);
     res.json({ success: true, message: "Question deleted" });
   } catch (err) {
     next(err);
