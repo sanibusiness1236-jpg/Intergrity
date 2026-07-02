@@ -48,23 +48,51 @@ async function getFlagSummary(req, res, next) {
   try {
     const { examId } = req.params;
 
-    const sessions = await prisma.examSession.findMany({
-      where: { examId },
-      include: {
-        behavioralFlags: true,
-        student: { select: { id: true, firstName: true, lastName: true, studentId: true } },
-      },
-    });
+    // Two targeted queries instead of one massive join that loads every flag row.
+    // groupBy gives us per-session flag-type counts in a single round-trip.
+    const [sessions, flagGroups] = await Promise.all([
+      prisma.examSession.findMany({
+        where: { examId },
+        select: {
+          studentId: true,
+          student: { select: { id: true, firstName: true, lastName: true, studentId: true } },
+        },
+      }),
+      prisma.behavioralFlag.groupBy({
+        by: ["sessionId", "flagType"],
+        where: { session: { examId } },
+        _count: { _all: true },
+      }),
+    ]);
 
-    const summary = sessions.map((s) => ({
-      studentId: s.studentId,
-      student: s.student,
-      totalFlags: s.behavioralFlags.length,
-      flagBreakdown: s.behavioralFlags.reduce((acc, f) => {
-        acc[f.flagType] = (acc[f.flagType] || 0) + 1;
-        return acc;
-      }, {}),
-    }));
+    // Build a lookup: sessionId → { flagType: count }
+    const flagsBySession = {};
+    for (const g of flagGroups) {
+      if (!flagsBySession[g.sessionId]) flagsBySession[g.sessionId] = {};
+      flagsBySession[g.sessionId][g.flagType] = g._count._all;
+    }
+
+    // Map sessions → student_id to session_id
+    const sessionForStudent = {};
+    const [sessionRows] = await Promise.all([
+      prisma.examSession.findMany({
+        where: { examId },
+        select: { id: true, studentId: true },
+      }),
+    ]);
+    for (const s of sessionRows) sessionForStudent[s.studentId] = s.id;
+
+    const summary = sessions.map((s) => {
+      const sessionId = sessionForStudent[s.studentId];
+      const breakdown = flagsBySession[sessionId] || {};
+      const totalFlags = Object.values(breakdown).reduce((a, b) => a + b, 0);
+      return {
+        studentId: s.studentId,
+        student: s.student,
+        totalFlags,
+        flagBreakdown: breakdown,
+      };
+    });
 
     res.json({ success: true, data: summary });
   } catch (err) {

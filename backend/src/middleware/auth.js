@@ -11,7 +11,10 @@ const redis = require("../config/redis");
 // still take effect within seconds, and when Redis is unavailable we transparently
 // fall back to the DB (safeRedis returns null), so behaviour is never broken.
 const AUTH_CACHE_PREFIX = "authuser:";
-const AUTH_CACHE_TTL = Number(process.env.AUTH_CACHE_TTL || 30); // seconds
+// 300 s (5 min) default. Role / isActive changes are rare; the cache is
+// explicitly invalidated (see invalidateAuthCache) on admin role updates.
+// Raising from 30 s to 300 s cuts ~90 % of per-request DB auth lookups.
+const AUTH_CACHE_TTL = Number(process.env.AUTH_CACHE_TTL || 300); // seconds
 
 /**
  * Validates the Bearer JWT, then fetches the user's CURRENT role directly
@@ -66,4 +69,13 @@ async function authenticate(req, _res, next) {
   }
 }
 
-module.exports = { authenticate };
+/**
+ * Explicitly evict a user's auth cache entry.
+ * Call this whenever a user's role or isActive status is changed so the
+ * longer TTL doesn't serve stale access-control data.
+ */
+async function invalidateAuthCache(userId) {
+  await redis.del(`${AUTH_CACHE_PREFIX}${userId}`);
+}
+
+module.exports = { authenticate, invalidateAuthCache };

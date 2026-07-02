@@ -21,8 +21,10 @@ const globalForPrisma = global;
 function withPoolDefaults(rawUrl) {
   if (!rawUrl) return rawUrl;
 
-  // Minimum healthy values for a single Render web instance.
-  const MIN_CONNECTION_LIMIT = 10;
+  // 25 connections per instance × 3 Render instances = 75 total Prisma-level
+  // connections. PgBouncer (transaction mode on port 6543) further multiplexes
+  // these down so the actual Postgres server sees far fewer open connections.
+  const MIN_CONNECTION_LIMIT = 25;
   const MIN_POOL_TIMEOUT = 30; // seconds — how long a request waits for a free conn
   const MIN_CONNECT_TIMEOUT = 15; // seconds — how long to wait for the initial TCP/TLS connect
 

@@ -5,6 +5,30 @@ const { AppError } = require("../../middleware/errorHandler");
 const AUTOSAVE_PREFIX = "autosave:";
 const AUTOSAVE_TTL = 60 * 60 * 4; // 4 hours
 
+// Lightweight session-ownership cache: sessionId → { studentId, examId, status }
+// Avoids a DB round-trip on every autosave / logPageRefresh call.
+const SESSION_META_PREFIX = "sessmeta:";
+const SESSION_META_TTL = 60 * 60 * 2; // 2 hours
+
+async function getSessionMeta(sessionId) {
+  const raw = await redis.get(`${SESSION_META_PREFIX}${sessionId}`);
+  if (raw) {
+    try { return JSON.parse(raw); } catch { /* fall through */ }
+  }
+  const s = await prisma.examSession.findUnique({
+    where: { id: sessionId },
+    select: { id: true, studentId: true, examId: true, status: true },
+  });
+  if (s) {
+    await redis.setex(`${SESSION_META_PREFIX}${sessionId}`, SESSION_META_TTL, JSON.stringify(s));
+  }
+  return s;
+}
+
+async function invalidateSessionMeta(sessionId) {
+  await redis.del(`${SESSION_META_PREFIX}${sessionId}`);
+}
+
 /** Extract the real client IP, honouring reverse-proxy X-Forwarded-For */
 function getClientIp(req) {
   const xff = req.headers["x-forwarded-for"];
@@ -31,9 +55,12 @@ async function startSession(req, res, next) {
     }
 
     // All sessions for this student + exam, newest first
+    // Limit to maxAttempts + 1 rows to avoid full-table scans for students
+    // who have been re-enrolled in many exams over time.
     const allSessions = await prisma.examSession.findMany({
       where: { examId, studentId },
       orderBy: { createdAt: "desc" },
+      take: (exam.maxAttempts || 1) + 2,
     });
 
     // Resume any active/disconnected session
@@ -127,7 +154,8 @@ async function autoSave(req, res, next) {
     const { sessionId } = req.params;
     const { answers } = req.body;
 
-    const session = await prisma.examSession.findUnique({ where: { id: sessionId } });
+    // Use the lightweight Redis-cached meta instead of a full DB round-trip.
+    const session = await getSessionMeta(sessionId);
     if (!session || session.studentId !== req.user.id) {
       throw new AppError("Session not found", 404);
     }
@@ -188,21 +216,34 @@ async function submitExam(req, res, next) {
       });
     }
 
-    await prisma.$transaction([
-      ...answerRecords.map((a) =>
-        prisma.answer.upsert({
-          where: { sessionId_questionId: { sessionId: a.sessionId, questionId: a.questionId } },
-          create: a,
-          update: { answer: a.answer, isCorrect: a.isCorrect, score: a.score },
-        })
-      ),
-      prisma.examSession.update({
+    // Bulk-upsert answers using a single raw SQL statement instead of N
+    // individual Prisma upserts. For a 50-question exam this reduces the
+    // transaction from 51 round-trips to 2 (bulk upsert + session update).
+    await prisma.$transaction(async (tx) => {
+      if (answerRecords.length > 0) {
+        // Delete stale answers for this session and re-insert in one shot.
+        // This is safe because the session is still IN_PROGRESS until we
+        // update it below, and no other writer touches this session's answers.
+        await tx.answer.deleteMany({ where: { sessionId } });
+        await tx.answer.createMany({
+          data: answerRecords.map((a) => ({
+            sessionId: a.sessionId,
+            questionId: a.questionId,
+            answer: a.answer,
+            isCorrect: a.isCorrect,
+            score: a.score,
+          })),
+        });
+      }
+      await tx.examSession.update({
         where: { id: sessionId },
         data: { status: "SUBMITTED", submittedAt: new Date(), score: totalScore, maxScore },
-      }),
-    ]);
+      });
+    });
 
     await redis.del(`${AUTOSAVE_PREFIX}${sessionId}`);
+    // Evict session meta so subsequent lookups reflect SUBMITTED status.
+    await invalidateSessionMeta(sessionId);
 
     // Respond immediately. When time expires every student submits at once —
     // awaiting the extra IP-anomaly queries here would hold a DB connection on
@@ -451,7 +492,7 @@ async function getMyActiveSession(req, res, next) {
 async function logPageRefresh(req, res, next) {
   try {
     const { sessionId } = req.params;
-    const session = await prisma.examSession.findUnique({ where: { id: sessionId } });
+    const session = await getSessionMeta(sessionId);
     if (!session || session.studentId !== req.user.id) {
       throw new AppError("Session not found", 404);
     }
@@ -489,4 +530,4 @@ async function logPageRefresh(req, res, next) {
   }
 }
 
-module.exports = { startSession, autoSave, submitExam, getSession, getActiveSessions, relocateStudent, getMyActiveSession, logPageRefresh };
+module.exports = { startSession, autoSave, submitExam, getSession, getActiveSessions, relocateStudent, getMyActiveSession, logPageRefresh, invalidateSessionMeta };

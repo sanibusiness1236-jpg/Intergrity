@@ -1,5 +1,6 @@
 const axios = require("axios");
 const prisma = require("../../config/db");
+const redis = require("../../config/redis");
 const { mlServiceUrl } = require("../../config/env");
 const { AppError } = require("../../middleware/errorHandler");
 
@@ -441,7 +442,10 @@ async function predictExamIntegrity(req, res, next) {
 //      a single DB round-trip. Real-time accuracy is preserved because the
 //      client also receives instant `flag:new` socket events between polls.
 const LIVE_CACHE_MS = Number(process.env.LIVE_SESSIONS_CACHE_MS || 4000);
-const _liveCache = new Map(); // key -> { ts, payload: { exams, rows } }
+// Redis-backed live-session cache so all 3 Render instances share one result.
+// Falls back to in-process cache when Redis is unavailable.
+const _liveCacheFallback = new Map(); // key -> { ts, payload }
+const LIVE_CACHE_PREFIX = "livesess:";
 
 async function buildLiveData(userId, examIds) {
   const exams = await prisma.exam.findMany({
@@ -564,18 +568,33 @@ async function buildLiveData(userId, examIds) {
 }
 
 async function getLiveDataCached(userId, examIds) {
-  const key = `${userId}|${[...examIds].sort().join(",")}`;
-  const hit = _liveCache.get(key);
-  if (hit && Date.now() - hit.ts < LIVE_CACHE_MS) return hit.payload;
+  const cacheKey = `${LIVE_CACHE_PREFIX}${userId}|${[...examIds].sort().join(",")}`;
+
+  // Try Redis first (shared across all instances → one DB hit per TTL period
+  // regardless of how many examiner tabs are polling).
+  if (redis.isAvailable()) {
+    try {
+      const raw = await redis.get(cacheKey);
+      if (raw) return JSON.parse(raw);
+    } catch { /* fall through to DB */ }
+  } else {
+    // Redis unavailable: fall back to in-process cache
+    const hit = _liveCacheFallback.get(cacheKey);
+    if (hit && Date.now() - hit.ts < LIVE_CACHE_MS) return hit.payload;
+  }
 
   const payload = await buildLiveData(userId, examIds);
   if (payload) {
-    _liveCache.set(key, { ts: Date.now(), payload });
-    // Opportunistic eviction so the cache can't grow unbounded across many
-    // examiners / exam-id combinations over a long-running process.
-    if (_liveCache.size > 500) {
-      const cutoff = Date.now() - LIVE_CACHE_MS;
-      for (const [k, v] of _liveCache) if (v.ts < cutoff) _liveCache.delete(k);
+    const ttlSec = Math.ceil(LIVE_CACHE_MS / 1000);
+    if (redis.isAvailable()) {
+      try { await redis.setex(cacheKey, ttlSec, JSON.stringify(payload)); } catch { /* non-fatal */ }
+    } else {
+      _liveCacheFallback.set(cacheKey, { ts: Date.now(), payload });
+      // Bound the in-process fallback map
+      if (_liveCacheFallback.size > 200) {
+        const cutoff = Date.now() - LIVE_CACHE_MS;
+        for (const [k, v] of _liveCacheFallback) if (v.ts < cutoff) _liveCacheFallback.delete(k);
+      }
     }
   }
   return payload;

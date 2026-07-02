@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
@@ -28,6 +29,10 @@ const app = express();
 // X-Forwarded-For. Trusting the first proxy hop makes req.ip (and therefore
 // the rate limiters below) key on the real client IP instead of the proxy's.
 app.set("trust proxy", 1);
+
+// Compress all HTTP responses — typically 60-70 % smaller JSON payloads.
+// Skip for already-compressed formats (images, video) and small responses.
+app.use(compression({ threshold: 1024, level: 6 }));
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(
@@ -91,8 +96,12 @@ app.use((req, res, next) => {
 // Browsers and CDNs will reuse the response for `seconds` without
 // hitting the DB again.  We only do this on safe, idempotent endpoints.
 function cacheFor(seconds) {
-  return (_req, res, next) => {
-    res.set("Cache-Control", `private, max-age=${seconds}, stale-while-revalidate=${seconds * 2}`);
+  return (req, res, next) => {
+    if (req.method === "GET") {
+      res.set("Cache-Control", `private, max-age=${seconds}, stale-while-revalidate=${seconds * 2}`);
+    } else {
+      res.set("Cache-Control", "no-store");
+    }
     next();
   };
 }
